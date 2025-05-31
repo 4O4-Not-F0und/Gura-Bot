@@ -20,6 +20,32 @@ The bot is configured using a `config.yml` file. An example configuration is pro
 
   * `-config <path>`: Path to the configuration file. Default: `config.yml`.
 
+### Configuration Reloading
+
+This application supports dynamic configuration reloading, allowing to update certain settings without a restart.
+
+#### How to Trigger a Reload
+
+To reload the configuration, send a `SIGHUP` signal to the running bot process:
+
+```bash
+killall -s HUP telegram_translate_bot
+```
+
+Upon receiving the `SIGHUP` signal, the bot will attempt to reload its configuration from the `config.yml` file.
+
+#### What Cannot Be Reloaded (Requires a Restart)
+
+The following settings require a full application restart to take effect:
+
+* **Bot Worker Pool Size**:
+
+    * `bot.worker_pool_size`: Changes to the number of concurrent message processing workers require a restart.
+
+* **Metric Server Listen Address**:
+
+    * `metric.listen`: The address and port for the Prometheus metrics server is configured at startup and cannot be changed via hot reload.
+
 ## Usage
 
 ### Prerequisites
