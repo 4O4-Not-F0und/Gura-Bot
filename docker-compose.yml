@@ -1,0 +1,15 @@
+
+services:
+  telegram-translate-bot:
+    image: ghcr.io/4O4-Not-F0und/telegram-translate-bot:main
+    container_name: telegram-translate-bot
+    volumes:
+      - "path/to/config/config.yml:/rss_exporter/config.yml:ro"
+    ports:
+      - "9091:9091/tcp"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        delay: 30s
+        window: 120s
