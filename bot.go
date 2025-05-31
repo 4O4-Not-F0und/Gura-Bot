@@ -61,14 +61,22 @@ func newSafeSlice[T comparable](s []T) (ss *SafeSlice[T]) {
 
 func (ss *SafeSlice[T]) Contains(elem T) bool {
 	ss.RLock()
-	defer ss.RUnlock()
-	return slices.Contains(ss.s, elem)
+	ok := slices.Contains(ss.s, elem)
+	ss.RUnlock()
+	return ok
 }
 
 func (ss *SafeSlice[T]) New(s []T) {
 	ss.Lock()
 	ss.s = slices.Clone(s)
 	ss.Unlock()
+}
+
+func (ss *SafeSlice[T]) Clone() (s []T) {
+	ss.RLock()
+	s = slices.Clone(ss.s)
+	ss.RUnlock()
+	return
 }
 
 type Bot struct {
@@ -135,6 +143,13 @@ func (b *Bot) ReloadConfig(botConfig BotConfig, translator *OpenAITranslator) (e
 
 	b.reloadConfigMux.Unlock()
 	logrus.Trace("released bot.reloadConfigMux")
+
+	for _, id := range b.allowedChats.Clone() {
+		chatIdStr := strconv.FormatInt(id, 10)
+		b.checkOrInitMessageMetricsForChat(chatIdStr)
+		b.checkOrInitTranslationMetricsForChat(chatIdStr)
+	}
+
 	return
 }
 
