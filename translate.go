@@ -23,6 +23,20 @@ const (
 	translationTokenUsedTypePrompt     = "prompt"
 )
 
+var (
+	allTranslationTaskStates = []string{
+		translationStatePending,
+		translationStateProcessing,
+		translationStateSuccess,
+		translationStateFailed,
+	}
+
+	allTranslationTokenUsedTypes = []string{
+		translationTokenUsedTypeCompletion,
+		translationTokenUsedTypePrompt,
+	}
+)
+
 // TranslateConfig holds all configuration related to translation services.
 type TranslateConfig struct {
 	DetectLangs []string             `yaml:"detect_langs"`

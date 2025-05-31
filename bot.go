@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"strconv"
+	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
@@ -14,6 +15,16 @@ const (
 	messageHandleStateFailed       = "failed"
 	messageHandleStateProcessed    = "processed"
 	messageHandleStateProcessing   = "processing"
+)
+
+var (
+	allMessageStates = []string{
+		messageHandleStatePending,
+		messageHandleStateUnauthorized,
+		messageHandleStateProcessing,
+		messageHandleStateProcessed,
+		messageHandleStateFailed,
+	}
 )
 
 type BotConfig struct {
@@ -36,11 +47,15 @@ func newBotConfig() BotConfig {
 }
 
 type Bot struct {
-	bot             *tgbotapi.BotAPI
-	translator      *OpenAITranslator
-	messageSettings BotMessageSettings
-	allowedChats    []int64
-	workerPoolSize  int
+	bot                           *tgbotapi.BotAPI
+	translator                    *OpenAITranslator
+	messageSettings               BotMessageSettings
+	allowedChats                  []int64
+	workerPoolSize                int
+	messageMetricsInitMux         *sync.Mutex
+	messageMetricsInitialized     map[string]*sync.Once
+	translationMetricsInitMux     *sync.Mutex
+	translationMetricsInitialized map[string]*sync.Once
 }
 
 func newBot(config BotConfig, translator *OpenAITranslator) (bot *Bot, err error) {
@@ -65,11 +80,15 @@ func newBot(config BotConfig, translator *OpenAITranslator) (bot *Bot, err error
 	}
 
 	bot = &Bot{
-		bot:             botApi,
-		translator:      translator,
-		messageSettings: config.MessageSettings,
-		allowedChats:    config.AllowedChats,
-		workerPoolSize:  config.WorkerPoolSize,
+		bot:                           botApi,
+		translator:                    translator,
+		messageSettings:               config.MessageSettings,
+		allowedChats:                  config.AllowedChats,
+		workerPoolSize:                config.WorkerPoolSize,
+		messageMetricsInitMux:         &sync.Mutex{},
+		messageMetricsInitialized:     map[string]*sync.Once{},
+		translationMetricsInitMux:     &sync.Mutex{},
+		translationMetricsInitialized: map[string]*sync.Once{},
 	}
 	return
 }
@@ -96,6 +115,7 @@ func (b *Bot) ServeBot() {
 		if msg.Chat != nil {
 			chatIdStr = strconv.FormatInt(msg.Chat.ID, 10)
 		}
+		b.checkOrInitMessageMetricsForChat(chatIdStr)
 
 		var text string
 		if len(msg.Text) > 0 {
@@ -156,6 +176,7 @@ func (b *Bot) handleMessage(message *tgbotapi.Message, text, chatIdStr string) {
 		return
 	}
 
+	b.checkOrInitTranslationMetricsForChat(chatIdStr)
 	resp, err := b.translator.Translate(text, chatIdStr)
 	if err != nil {
 		b.onTranslationFailed(chatIdStr)
@@ -195,6 +216,54 @@ func (b *Bot) handleMessage(message *tgbotapi.Message, text, chatIdStr string) {
 	}
 	logger.Info("completed")
 	metricMessages.WithLabelValues(messageHandleStateProcessed, chatIdStr).Inc()
+}
+
+func (b *Bot) checkOrInitMessageMetricsForChat(chatIdStr string) {
+	logger := logrus.WithField("chat_id", chatIdStr)
+
+	logger.Trace("acquiring lock of messageMetricsInitMux")
+	b.messageMetricsInitMux.Lock()
+	logger.Trace("acquired lock of messageMetricsInitMux")
+	once, ok := b.messageMetricsInitialized[chatIdStr]
+	if !ok {
+		once = &sync.Once{}
+		b.messageMetricsInitialized[chatIdStr] = once
+	}
+	b.messageMetricsInitMux.Unlock()
+	logger.Trace("released lock of messageMetricsInitMux")
+
+	once.Do(func() {
+		for _, state := range allMessageStates {
+			metricMessages.WithLabelValues(state, chatIdStr).Set(0)
+		}
+		logger.Debugf("message metrics initialized")
+	})
+}
+
+func (b *Bot) checkOrInitTranslationMetricsForChat(chatIdStr string) {
+	logger := logrus.WithField("chat_id", chatIdStr)
+
+	logger.Trace("acquiring  lock of translationMetricsInitMux")
+	b.translationMetricsInitMux.Lock()
+	logger.Trace("acquired lock of translationMetricsInitMux")
+
+	once, ok := b.translationMetricsInitialized[chatIdStr]
+	if !ok {
+		once = &sync.Once{}
+		b.translationMetricsInitialized[chatIdStr] = once
+	}
+	b.translationMetricsInitMux.Unlock()
+	logger.Trace("released lock of translationMetricsInitMux")
+
+	once.Do(func() {
+		for _, state := range allTranslationTaskStates {
+			metricTranslationTasks.WithLabelValues(state, chatIdStr).Set(0)
+		}
+		for _, t := range allTranslationTokenUsedTypes {
+			metricTranslationTokensUsed.WithLabelValues(t, chatIdStr).Add(0.0)
+		}
+		logger.Debugf("translation tasks metrics initialized")
+	})
 }
 
 func (b *Bot) onTranslationFailed(chatIdStr string) {
