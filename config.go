@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +37,5 @@ func loadConfig(configFile string) (cfg *Config, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse '%s' failed: %w", configFile, err)
 	}
-
-	logrus.Infof("loaded config from '%s'", configFile)
 	return
 }

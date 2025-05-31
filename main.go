@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -36,12 +38,11 @@ func main() {
 	if err != nil {
 		logrus.Fatalf("load config failed: %v", err)
 	}
+	logrus.Infof("loaded config from '%s'", configFile)
 
-	logLevel, err := logrus.ParseLevel(appConfig.LogLevel)
+	err = reloadLogConfig(appConfig.LogLevel)
 	if err != nil {
-		logrus.Error(err)
-	} else {
-		logrus.SetLevel(logLevel)
+		logrus.Errorf("error parsing new log level '%s': %v", appConfig.LogLevel, err)
 	}
 
 	initMetricServer(appConfig.Metric)
@@ -56,5 +57,56 @@ func main() {
 		logrus.Fatal(err)
 	}
 
+	handleSignals(bot)
 	bot.ServeBot()
+}
+
+func reloadLogConfig(level string) (err error) {
+	logLevel, err := logrus.ParseLevel(level)
+	if err != nil {
+		return
+	}
+	logrus.Infof("log level changed to: %s", level)
+	logrus.SetLevel(logLevel)
+	return
+}
+
+func handleSignals(bot *Bot) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGHUP)
+
+	go func() {
+		for sig := range sigChan {
+			switch sig {
+			case syscall.SIGHUP:
+				logrus.Infof("received %s, attempting to reload config", sig.String())
+
+				appConfig, err := loadConfig(configFile)
+				if err != nil {
+					logrus.Errorf("error reloading config: %v", err)
+					continue
+				}
+
+				err = reloadLogConfig(appConfig.LogLevel)
+				if err != nil {
+					logrus.Errorf("error parsing new log level '%s': %v", appConfig.LogLevel, err)
+					continue
+				}
+
+				translator, err := newOpenAITranslator(appConfig.Translate)
+				if err != nil {
+					logrus.Error(err)
+					continue
+				}
+
+				err = bot.ReloadConfig(appConfig.Bot, translator)
+				if err != nil {
+					logrus.Error(err)
+					continue
+				}
+
+				logrus.Info("config reloaded")
+			}
+		}
+	}()
 }

@@ -46,12 +46,38 @@ func newBotConfig() BotConfig {
 	}
 }
 
+type SafeSlice[T comparable] struct {
+	*sync.RWMutex
+	s []T
+}
+
+func newSafeSlice[T comparable](s []T) (ss *SafeSlice[T]) {
+	ss = &SafeSlice[T]{
+		RWMutex: new(sync.RWMutex),
+	}
+	ss.New(s)
+	return
+}
+
+func (ss *SafeSlice[T]) Contains(elem T) bool {
+	ss.RLock()
+	defer ss.RUnlock()
+	return slices.Contains(ss.s, elem)
+}
+
+func (ss *SafeSlice[T]) New(s []T) {
+	ss.Lock()
+	ss.s = slices.Clone(s)
+	ss.Unlock()
+}
+
 type Bot struct {
 	bot                           *tgbotapi.BotAPI
 	translator                    *OpenAITranslator
 	messageSettings               BotMessageSettings
-	allowedChats                  []int64
+	allowedChats                  *SafeSlice[int64]
 	workerPoolSize                int
+	reloadConfigMux               *sync.Mutex
 	messageMetricsInitMux         *sync.Mutex
 	messageMetricsInitialized     map[string]*sync.Once
 	translationMetricsInitMux     *sync.Mutex
@@ -83,13 +109,32 @@ func newBot(config BotConfig, translator *OpenAITranslator) (bot *Bot, err error
 		bot:                           botApi,
 		translator:                    translator,
 		messageSettings:               config.MessageSettings,
-		allowedChats:                  config.AllowedChats,
+		allowedChats:                  newSafeSlice(config.AllowedChats),
 		workerPoolSize:                config.WorkerPoolSize,
+		reloadConfigMux:               &sync.Mutex{},
 		messageMetricsInitMux:         &sync.Mutex{},
 		messageMetricsInitialized:     map[string]*sync.Once{},
 		translationMetricsInitMux:     &sync.Mutex{},
 		translationMetricsInitialized: map[string]*sync.Once{},
 	}
+	err = bot.ReloadConfig(config, translator)
+	return
+}
+
+func (b *Bot) ReloadConfig(botConfig BotConfig, translator *OpenAITranslator) (err error) {
+	logrus.Trace("acquiring bot.reloadConfigMux")
+	b.reloadConfigMux.Lock()
+	logrus.Trace("acquired bot.reloadConfigMux")
+
+	b.allowedChats.New(botConfig.AllowedChats)
+	b.messageSettings = botConfig.MessageSettings
+	b.translator = translator
+	if b.workerPoolSize != botConfig.WorkerPoolSize {
+		logrus.Warn("worker pool size changed, please restart bot to apply")
+	}
+
+	b.reloadConfigMux.Unlock()
+	logrus.Trace("released bot.reloadConfigMux")
 	return
 }
 
@@ -147,7 +192,6 @@ func (b *Bot) ServeBot() {
 // translates, and sends a reply.
 func (b *Bot) handleMessage(message *tgbotapi.Message, text, chatIdStr string) {
 	logger := logrus.WithField("chat_id", chatIdStr)
-
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("panic recovered in handleMessage: %v", r)
@@ -221,16 +265,16 @@ func (b *Bot) handleMessage(message *tgbotapi.Message, text, chatIdStr string) {
 func (b *Bot) checkOrInitMessageMetricsForChat(chatIdStr string) {
 	logger := logrus.WithField("chat_id", chatIdStr)
 
-	logger.Trace("acquiring lock of messageMetricsInitMux")
+	logger.Trace("acquiring bot.messageMetricsInitMux")
 	b.messageMetricsInitMux.Lock()
-	logger.Trace("acquired lock of messageMetricsInitMux")
+	logger.Trace("acquired bot.messageMetricsInitMux")
 	once, ok := b.messageMetricsInitialized[chatIdStr]
 	if !ok {
 		once = &sync.Once{}
 		b.messageMetricsInitialized[chatIdStr] = once
 	}
 	b.messageMetricsInitMux.Unlock()
-	logger.Trace("released lock of messageMetricsInitMux")
+	logger.Trace("released bot.messageMetricsInitMux")
 
 	once.Do(func() {
 		for _, state := range allMessageStates {
@@ -243,9 +287,9 @@ func (b *Bot) checkOrInitMessageMetricsForChat(chatIdStr string) {
 func (b *Bot) checkOrInitTranslationMetricsForChat(chatIdStr string) {
 	logger := logrus.WithField("chat_id", chatIdStr)
 
-	logger.Trace("acquiring  lock of translationMetricsInitMux")
+	logger.Trace("acquiring  bot.translationMetricsInitMux")
 	b.translationMetricsInitMux.Lock()
-	logger.Trace("acquired lock of translationMetricsInitMux")
+	logger.Trace("acquired bot.translationMetricsInitMux")
 
 	once, ok := b.translationMetricsInitialized[chatIdStr]
 	if !ok {
@@ -253,7 +297,7 @@ func (b *Bot) checkOrInitTranslationMetricsForChat(chatIdStr string) {
 		b.translationMetricsInitialized[chatIdStr] = once
 	}
 	b.translationMetricsInitMux.Unlock()
-	logger.Trace("released lock of translationMetricsInitMux")
+	logger.Trace("released bot.ranslationMetricsInitMux")
 
 	once.Do(func() {
 		for _, state := range allTranslationTaskStates {
@@ -277,7 +321,7 @@ func (b *Bot) onMessageHandleFailed(chatIdStr string) {
 
 func (b *Bot) isAllowed(message *tgbotapi.Message) bool {
 	if message.Chat.Type == "private" {
-		return slices.Contains(b.allowedChats, message.From.ID)
+		return b.allowedChats.Contains(message.From.ID)
 	}
-	return slices.Contains(b.allowedChats, message.Chat.ID)
+	return b.allowedChats.Contains(message.Chat.ID)
 }
