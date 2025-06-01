@@ -4,65 +4,172 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-type TranslatorEntry interface {
-	Translator() (TranslatorInstance, error)
-	TotalWeight() int
-	AddInstance(TranslatorInstance, int)
+type Translator interface {
+	OnSuccess()
+	OnFailure()
+	IsDisabled() bool
+	ResetFailoverState()
+	Translate(string) (*TranslateResponse, error)
+	InstanceName() string
+}
+
+type baseTranslator struct {
+	instance TranslatorInstance
+	logger   *logrus.Entry
+
+	// Failover
+	failoverConfig            FailoverConfig
+	failures                  int
+	currentCooldownMultiplier int
+	disableCycleCount         int
+	disableUntil              time.Time
+	isPermanentlyDisabled     bool
+	failoverMu                *sync.Mutex
+}
+
+func newBaseTranslator(instance TranslatorInstance, failover FailoverConfig) (bt *baseTranslator) {
+	bt = &baseTranslator{
+		instance:              instance,
+		failoverConfig:        failover,
+		failoverMu:            new(sync.Mutex),
+		isPermanentlyDisabled: false,
+	}
+	bt.logger = logrus.WithField("translator_name", instance.Name())
+	bt.ResetFailoverState()
+	return
+}
+
+func (bt *baseTranslator) Translate(s string) (tr *TranslateResponse, err error) {
+	tr, err = bt.instance.Translate(s)
+	if err != nil {
+		bt.OnFailure()
+		return
+	}
+	bt.OnSuccess()
+	return
+}
+
+func (bt *baseTranslator) InstanceName() string {
+	return bt.instance.Name()
+}
+
+func (bt *baseTranslator) OnSuccess() {
+	bt.failoverMu.Lock()
+	rst := bt.failures > 0 || bt.currentCooldownMultiplier > 0 || bt.disableCycleCount > 0
+	bt.failoverMu.Unlock()
+
+	if rst {
+		bt.ResetFailoverState()
+	}
+}
+
+func (bt *baseTranslator) ResetFailoverState() {
+	bt.failoverMu.Lock()
+	bt.failures = 0
+	bt.currentCooldownMultiplier = 0
+	bt.disableCycleCount = 0
+	// bt.isPermanentlyDisabled = false
+	bt.failoverMu.Unlock()
+}
+
+func (bt *baseTranslator) OnFailure() {
+	bt.logger.Warnf("New failure. Current failures: %d/%d", bt.failures, bt.failoverConfig.MaxFailures)
+	bt.failoverMu.Lock()
+	defer bt.failoverMu.Unlock()
+
+	bt.failures += 1
+	if bt.failures >= bt.failoverConfig.MaxFailures {
+		bt.failures = 0
+		bt.currentCooldownMultiplier += 1
+		bt.disableCycleCount += 1
+		if bt.disableCycleCount >= bt.failoverConfig.MaxDisableCycles {
+			bt.logger.Errorf("Reached maximum disable cycles: %d. Translator permanently disabled",
+				bt.failoverConfig.MaxDisableCycles)
+			bt.isPermanentlyDisabled = true
+			return
+		}
+		bt.disableUntil = time.Now().Add(
+			time.Duration(
+				bt.currentCooldownMultiplier*
+					bt.failoverConfig.CooldownBaseSec,
+			) * time.Second)
+		bt.logger.Warnf("reached maximum failures, disable it until %s",
+			bt.disableUntil.Local().Format(time.RFC3339Nano))
+	}
+}
+
+func (bt *baseTranslator) IsDisabled() bool {
+	bt.failoverMu.Lock()
+	ret := bt.isPermanentlyDisabled || time.Now().Before(bt.disableUntil)
+	bt.failoverMu.Unlock()
+	return ret
 }
 
 type weightedTranslator struct {
-	instance      TranslatorInstance
+	baseTranslator
 	configWeight  int
 	currentWeight int
 }
 
-type weightedTranslatorEntry struct {
-	s           []*weightedTranslator
-	totalWeight int
-	mu          *sync.Mutex
-}
-
-func newWeightedTranslatorEntry() (wte *weightedTranslatorEntry) {
-	wte = &weightedTranslatorEntry{
-		s:           make([]*weightedTranslator, 0),
-		totalWeight: 0,
-		mu:          &sync.Mutex{},
+func newWeightedTranslator(opts TranslatorEntryInstanceOptions) (wt *weightedTranslator) {
+	wt = &weightedTranslator{
+		baseTranslator: *newBaseTranslator(opts.Instance, opts.FailoverConfig),
+		configWeight:   opts.Weight,
+		currentWeight:  0,
 	}
 	return
 }
 
-func (wte *weightedTranslatorEntry) AddInstance(instance TranslatorInstance, weight int) {
-	wte.s = append(wte.s, &weightedTranslator{
-		instance:      instance,
-		configWeight:  weight,
-		currentWeight: 0,
-	})
-	wte.totalWeight += weight
-	logrus.Infof("added WRR translator '%s', weight: %d", instance.Name(), weight)
+// Translator Entries
+type TranslatorEntry interface {
+	Translator() (Translator, error)
+	TotalConfigWeight() int
+	AddInstance(TranslatorEntryInstanceOptions)
 }
 
-func (wte *weightedTranslatorEntry) TotalWeight() int {
-	return wte.totalWeight
+type TranslatorEntryInstanceOptions struct {
+	Instance       TranslatorInstance
+	FailoverConfig FailoverConfig
+	Weight         int
 }
 
-func (wte *weightedTranslatorEntry) Translator() (translator TranslatorInstance, err error) {
+type weightedTranslatorEntry struct {
+	s                 []*weightedTranslator
+	totalConfigWeight int
+	mu                *sync.Mutex
+}
+
+func newWeightedTranslatorEntry() (wte *weightedTranslatorEntry) {
+	wte = &weightedTranslatorEntry{
+		s:                 make([]*weightedTranslator, 0),
+		totalConfigWeight: 0,
+		mu:                &sync.Mutex{},
+	}
+	return
+}
+
+func (wte *weightedTranslatorEntry) AddInstance(opts TranslatorEntryInstanceOptions) {
+	wte.s = append(wte.s, newWeightedTranslator(opts))
+	wte.totalConfigWeight += opts.Weight
+	logrus.Infof("added WRR translator '%s', weight: %d", opts.Instance.Name(), opts.Weight)
+}
+
+func (wte *weightedTranslatorEntry) TotalConfigWeight() int {
+	return wte.totalConfigWeight
+}
+
+func (wte *weightedTranslatorEntry) Translator() (translator Translator, err error) {
 	if len(wte.s) == 0 {
 		err = fmt.Errorf("no wrr translator available")
 		return
 	}
-	if len(wte.s) == 1 {
-		translator = wte.s[0].instance
-		return
-	}
 
-	// Nginx's smooth weighted round-robin algorithm:
-	// 1. For each server i: current_weight[i] = current_weight[i] + effective_weight[i]
-	// 2. selected_server = server with highest current_weight
-	// 3. current_weight[selected_server] = current_weight[selected_server] - total_weight
+	// Nginx's smooth weighted round-robin (sWRR) algorithm:
 	selectedIndex := -1
 	maxCurrentWeight := 0
 
@@ -70,9 +177,17 @@ func (wte *weightedTranslatorEntry) Translator() (translator TranslatorInstance,
 	wte.mu.Lock()
 	logrus.Trace("acquired wrr lock")
 	wrrBefore := wte.unsafeString()
+
 	for i, entry := range wte.s {
+		if entry.IsDisabled() {
+			// Skip disabled translator
+			continue
+		}
+
+		// sWRR: 1. For each server i: current_weight[i] = current_weight[i] + effective_weight[i]
 		entry.currentWeight += entry.configWeight
 		if selectedIndex == -1 || entry.currentWeight > maxCurrentWeight {
+			// sWRR: 2. selected_server = server with highest current_weight
 			maxCurrentWeight = entry.currentWeight
 			selectedIndex = i
 		}
@@ -80,18 +195,21 @@ func (wte *weightedTranslatorEntry) Translator() (translator TranslatorInstance,
 
 	if selectedIndex == -1 {
 		wte.mu.Unlock()
-		// Just for safe, should not happen if there are entries and totalWeight > 0
-		return nil, fmt.Errorf("failed to select a translator using WRR")
+		logrus.Trace("released wrr lock")
+		return nil, fmt.Errorf("no available translator")
 	}
-	wte.s[selectedIndex].currentWeight -= wte.totalWeight
-	translator = wte.s[selectedIndex].instance
+
+	// sWRR: 3. current_weight[selected_server] = current_weight[selected_server] - total_weight
+	wte.s[selectedIndex].currentWeight -= wte.totalConfigWeight
+	translator = wte.s[selectedIndex]
+
 	wrrAfter := wte.unsafeString()
 	wte.mu.Unlock()
 	logrus.Trace("released wrr lock")
 
 	logrus.Debugf("wrr before: %s", wrrBefore)
 	logrus.Debugf("wrr after: %s", wrrAfter)
-	logrus.Debugf("selected translator: %s", translator.Name())
+	logrus.Debugf("selected translator: %s", translator.InstanceName())
 	return
 }
 

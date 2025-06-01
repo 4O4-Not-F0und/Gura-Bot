@@ -83,6 +83,9 @@ type TranslatorInstance interface {
 
 // TranslateService provides common functionality for translators, primarily language detection.
 type TranslateService struct {
+	// set to negative or zero to disable retry
+	maxmiumRetry            int
+	retryCooldown           int
 	sourceLangConf          SourceLanguageConfig
 	detectorBuilder         lingua.LanguageDetectorBuilder
 	defaultTranslatorConfig DefaultTranslatorConfig
@@ -93,8 +96,15 @@ type TranslateService struct {
 
 func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
 	ts = &TranslateService{
+		maxmiumRetry:    conf.MaxmiumRetry,
 		translatorEntry: newWeightedTranslatorEntry(),
 	}
+
+	if conf.RetryCooldown <= 0 {
+		err = fmt.Errorf("retry cooldown must be positive")
+		return
+	}
+	ts.retryCooldown = conf.RetryCooldown
 
 	if len(conf.DetectLangs) == 0 {
 		err = fmt.Errorf("no detect languages configured")
@@ -166,6 +176,8 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 		return
 	}
 
+	names := []string{}
+
 	for _, tc := range translatorConfs {
 		err = tc.CheckAndMergeDefaultConfig(ts.defaultTranslatorConfig)
 		if err != nil {
@@ -184,9 +196,19 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 			return
 		}
 
-		ts.translatorEntry.AddInstance(instance, tc.Weight)
+		if slices.Contains(names, instance.Name()) {
+			err = fmt.Errorf("duplicated translator name: %s", instance.Name())
+			return
+		}
+
+		names = append(names, instance.Name())
+		ts.translatorEntry.AddInstance(TranslatorEntryInstanceOptions{
+			Instance:       instance,
+			Weight:         tc.Weight,
+			FailoverConfig: tc.Failover,
+		})
 	}
-	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalWeight())
+	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalConfigWeight())
 	return
 }
 
@@ -212,6 +234,25 @@ func (ts *TranslateService) DetectLang(text string) (lang string, confidence flo
 }
 
 func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResponse, err error) {
+	retry := 0
+	logger := logrus.WithField("chat_id", req.ChatId)
+	for {
+		resp, err = ts.translate(req, logger)
+		if err == nil {
+			return
+		}
+
+		if retry >= ts.maxmiumRetry {
+			logger.Errorf("no more retries: maximum retries exceeded after %d attempts", retry)
+			return
+		}
+		retry += 1
+		logger.Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
+		time.Sleep(time.Duration(ts.retryCooldown) * time.Second)
+	}
+}
+
+func (ts *TranslateService) translate(req TranslateRequest, logger *logrus.Entry) (resp *TranslateResponse, err error) {
 	translator, err := ts.translatorEntry.Translator()
 	if err != nil {
 		err = fmt.Errorf("error on select translator: %w", err)
@@ -221,10 +262,7 @@ func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResp
 	ctx, cancel := context.WithTimeout(context.Background(), translationLimiterWaitSeconds*time.Second)
 	defer cancel()
 
-	logger := logrus.WithFields(logrus.Fields{
-		"chat_id":         req.ChatId,
-		"translator_name": translator.Name(),
-	})
+	logger = logger.WithField("translator_name", translator.InstanceName())
 
 	logger.Trace("wating for global limiter")
 	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Inc()

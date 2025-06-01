@@ -13,7 +13,7 @@ import (
 
 // OpenAITranslator implements the translation logic using the OpenAI style API.
 // It embeds baseTranslator for common functionalities.
-type OpenAITranslator struct {
+type OpenAITranslatorInstance struct {
 	name         string
 	aiClient     openai.Client
 	systemPrompt string
@@ -25,7 +25,7 @@ type OpenAITranslator struct {
 // It validates the provided TranslateConfig and configures the OpenAI client,
 // language detector, rate limiter, and other parameters.
 // Returns an error if any critical configuration is missing or invalid.
-func newOpenAITranslator(conf TranslatorInstanceConfig) (c *OpenAITranslator, err error) {
+func newOpenAITranslator(conf TranslatorInstanceConfig) (c *OpenAITranslatorInstance, err error) {
 	openaiOpts := []option.RequestOption{}
 
 	if conf.Token == "" {
@@ -42,7 +42,7 @@ func newOpenAITranslator(conf TranslatorInstanceConfig) (c *OpenAITranslator, er
 		return
 	}
 
-	c = new(OpenAITranslator)
+	c = new(OpenAITranslatorInstance)
 	c.aiClient = openai.NewClient(openaiOpts...)
 	c.model = conf.Model
 
@@ -56,14 +56,14 @@ func newOpenAITranslator(conf TranslatorInstanceConfig) (c *OpenAITranslator, er
 	return
 }
 
-func (t *OpenAITranslator) Name() string {
+func (t *OpenAITranslatorInstance) Name() string {
 	return t.name
 }
 
 // Translate sends the given text to the OpenAI API for translation.
 // It respects the configured timeout and rate limiter.
 // Returns the API's chat completion response or an error.
-func (t *OpenAITranslator) Translate(text string) (resp *TranslateResponse, err error) {
+func (t *OpenAITranslatorInstance) Translate(text string) (resp *TranslateResponse, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
 	defer cancel()
 
