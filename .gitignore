@@ -27,4 +27,4 @@ go.work.sum
 # Binary file
 
 # Config file
-config.yml
+config.yml*

@@ -28,7 +28,7 @@ var (
 			Name:      "messages",
 			Help:      "Current number of messages being processed by the bot.",
 		},
-		[]string{"state", "chat_id"},
+		[]string{"state", "chat_type"},
 	)
 
 	// States: "pending" (waiting for rate limiter),
@@ -41,7 +41,7 @@ var (
 			Name:      "translation_tasks_total",
 			Help:      "Total number of translation tasks, by state.",
 		},
-		[]string{"state", "chat_id"},
+		[]string{"state", "chat_type"},
 	)
 
 	// Types: "completion" (output tokens)
@@ -52,7 +52,7 @@ var (
 			Name:      "translation_tokens_used",
 			Help:      "Used tokens of translation tasks.",
 		},
-		[]string{"type", "chat_id"},
+		[]string{"type", "chat_type"},
 	)
 )
 

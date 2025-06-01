@@ -19,7 +19,7 @@ bot:
   # Number of concurrent workers for handling messages.
   worker_pool_size: 8
 
-translate:
+translate_service:
   # A list of ISO 639-1 language codes that the lingua-go library should be configured to detect.
   detect_langs:
     - ZH
@@ -34,25 +34,22 @@ translate:
       - JA
       - EN
 
-  # OpenAI compatible API settings
-  translator:
-    rate_limit:
-      # The burst capacity of the rate limiter.
-      # Set bucket_size to 1 to disable burst.
-      bucket_size: 5
-      # The rate at which tokens are refilled to the bucket per second.
-      # e.g.: 0.1 means 6r/min
-      refill_token_per_sec: 0.1
-    # Timeout in seconds for API translation requests (including waiting for rate limiter).
+  rate_limit:
+    # The burst capacity of the rate limiter.
+    # Set bucket_size to 1 to disable burst.
+    bucket_size: 5
+    # The rate at which tokens are refilled to the bucket per second.
+    # e.g.: 0.1 means 6r/min
+    refill_token_per_sec: 0.1
+
+  # default settings
+  default_translator_config:
+    type: openai
+    weight: 1
+    # Timeout in seconds for API translation requests.
     timeout: 60
-    # The base URL of the OpenAI-compatible API.
-    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai"
-    # REQUIRED: The model to use for translation
-    model: "gemini-2.5-flash-preview"
-    # Your API key for the translation service.
-    token: ""
     # REQUIRED: The system prompt to guide the AI model's translation.
-    prompt: |
+    system_prompt: |
       **# Role & Objective**
 
       You are now a professional translation expert with many years of translation experience and a profound understanding of the cultural backgrounds of both the source and target languages. Your core objective is to accurately, fluently, and elegantly translate the text content provided by the user into English.
@@ -78,3 +75,13 @@ translate:
         Strictly output the complete translated text; do not output any extraneous content.
 
       Now, please translate strictly according to the requirements above based on the content provided by the user, without any deviation.
+
+  translators:
+    - name: translator-01
+      # The base URL of the OpenAI-compatible API.
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai"
+      # REQUIRED: The model to use for translation
+      model: "gemini-2.5-flash-preview"
+      # Your API key for the translation service.
+      token: ""
+    

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httputil"
 	"slices"
 	"time"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -21,6 +21,8 @@ const (
 
 	translationTokenUsedTypeCompletion = "completion"
 	translationTokenUsedTypePrompt     = "prompt"
+
+	translationLimiterWaitSeconds = 30
 )
 
 var (
@@ -37,160 +39,100 @@ var (
 	}
 )
 
-// TranslateConfig holds all configuration related to translation services.
-type TranslateConfig struct {
-	DetectLangs []string             `yaml:"detect_langs"`
-	SourceLang  SourceLanguageConfig `yaml:"source_lang"`
-	Translator  TranslatorConfig     `yaml:"translator"`
+type TranslateRequest struct {
+	Text     string
+	ChatType string
+	ChatId   string
 }
 
-// SourceLanguageConfig defines parameters for validating detected source languages.
-type SourceLanguageConfig struct {
-	ConfidenceThreshold float64  `yaml:"confidence_threshold"`
-	Langs               []string `yaml:"langs"`
-}
-
-// TranslatorConfig holds settings for the translation provider (e.g., OpenAI).
-type TranslatorConfig struct {
-	Endpoint  string                    `yaml:"endpoint"`
-	Model     string                    `yaml:"model"`
-	Token     string                    `yaml:"token"`
-	Prompt    string                    `yaml:"prompt"`
-	Timeout   int64                     `yaml:"timeout"`
-	RateLimit TranslatorRateLimitConfig `yaml:"rate_limit"`
-}
-
-// TranslatorRateLimitConfig defines the parameters for the rate limiter.
-type TranslatorRateLimitConfig struct {
-	BucketSize int     `yaml:"bucket_size"`
-	RefillTPS  float64 `yaml:"refill_token_per_sec"`
-}
-
-// newTranslateConfig creates a new TranslateConfig with default empty slices and zero values.
-func newTranslateConfig() (c TranslateConfig) {
-	return TranslateConfig{
-		DetectLangs: make([]string, 0),
-		SourceLang: SourceLanguageConfig{
-			ConfidenceThreshold: 0,
-			Langs:               make([]string, 0),
-		},
-		Translator: TranslatorConfig{},
+type TranslateResponse struct {
+	Text       string
+	TokenUsage struct {
+		Completion int64
+		Prompt     int64
 	}
 }
 
-// baseTranslator provides common functionality for translators, primarily language detection.
-type baseTranslator struct {
-	sourceLangConf  SourceLanguageConfig
-	detectorBuilder lingua.LanguageDetectorBuilder
-	timeout         time.Duration
-	limiter         *rate.Limiter
+type TranslateError struct {
+	e        error
+	Request  *http.Request
+	Response *http.Response
 }
 
-// DetectLang attempts to detect the language of the given text.
-// It returns the detected language (ISO 639-1 code), the confidence score,
-// and an error if the detected language is not supported or confidence is too low.
-func (t *baseTranslator) DetectLang(text string) (lang string, confidence float64, err error) {
-	detector := t.detectorBuilder.Build()
-	for _, cv := range detector.ComputeLanguageConfidenceValues(text) {
-		l := cv.Language().IsoCode639_1().String()
-		c := cv.Value()
-		if c > confidence {
-			lang = l
-			confidence = c
-		}
+func (r *TranslateError) DumpRequest(body bool) []byte {
+	if r.Request.GetBody != nil {
+		r.Request.Body, _ = r.Request.GetBody()
 	}
-
-	if !slices.Contains(t.sourceLangConf.Langs, lang) ||
-		confidence < t.sourceLangConf.ConfidenceThreshold {
-		err = fmt.Errorf("supported language not detected")
-	}
-
-	return
+	out, _ := httputil.DumpRequestOut(r.Request, body)
+	return out
 }
 
-// OpenAITranslator implements the translation logic using the OpenAI style API.
-// It embeds baseTranslator for common functionalities.
-type OpenAITranslator struct {
-	baseTranslator
-	aiClient     openai.Client
-	systemPrompt string
-	model        string
+func (r *TranslateError) DumpResponse(body bool) []byte {
+	out, _ := httputil.DumpResponse(r.Response, body)
+	return out
 }
 
-// newOpenAITranslator creates and initializes a new OpenAITranslator.
-// It validates the provided TranslateConfig and configures the OpenAI client,
-// language detector, rate limiter, and other parameters.
-// Returns an error if any critical configuration is missing or invalid.
-func newOpenAITranslator(translateConf TranslateConfig) (c *OpenAITranslator, err error) {
-	c = new(OpenAITranslator)
-	openaiOpts := []option.RequestOption{}
+func (r *TranslateError) Error() string {
+	return r.e.Error()
+}
 
-	if translateConf.Translator.Endpoint == "" {
-		logrus.Info("no OpenAI endpoint configured, using default endpoint")
-	} else {
-		openaiOpts = append(openaiOpts, option.WithBaseURL(translateConf.Translator.Endpoint))
+type TranslatorInstance interface {
+	Translate(string) (*TranslateResponse, error)
+	Name() string
+}
+
+// TranslateService provides common functionality for translators, primarily language detection.
+type TranslateService struct {
+	sourceLangConf          SourceLanguageConfig
+	detectorBuilder         lingua.LanguageDetectorBuilder
+	defaultTranslatorConfig DefaultTranslatorConfig
+	detector                lingua.LanguageDetector
+	translators             []TranslatorInstance
+	limiter                 *rate.Limiter
+}
+
+func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
+	ts = &TranslateService{
+		translators: make([]TranslatorInstance, 0),
 	}
 
-	if translateConf.Translator.Token == "" {
-		logrus.Warn("no API token configured, using empty")
-	} else {
-		openaiOpts = append(openaiOpts, option.WithAPIKey(translateConf.Translator.Token))
-	}
-	c.aiClient = openai.NewClient(openaiOpts...)
-
-	if translateConf.Translator.Model == "" {
-		err = fmt.Errorf("no openai model configured")
-		return
-	}
-	c.model = translateConf.Translator.Model
-
-	if translateConf.Translator.Prompt == "" {
-		err = fmt.Errorf("no system prompt configured")
-		return
-	}
-	c.systemPrompt = translateConf.Translator.Prompt
-
-	if len(translateConf.DetectLangs) == 0 {
+	if len(conf.DetectLangs) == 0 {
 		err = fmt.Errorf("no detect languages configured")
 		return
 	}
 
-	if len(translateConf.SourceLang.Langs) == 0 {
+	if len(conf.SourceLang.Langs) == 0 {
 		err = fmt.Errorf("no source languages configured")
 		return
 	}
 
-	if translateConf.SourceLang.ConfidenceThreshold == 0 {
-		err = fmt.Errorf("confidence threshold is zero")
+	if conf.SourceLang.ConfidenceThreshold <= 0 || conf.SourceLang.ConfidenceThreshold > 1 {
+		err = fmt.Errorf("confidence threshold must in 0-1")
 		return
 	}
-	c.sourceLangConf = translateConf.SourceLang
+	ts.sourceLangConf = conf.SourceLang
 
-	if translateConf.Translator.Timeout == 0 {
-		err = fmt.Errorf("translator timeout is zero")
-		return
-	}
-	c.timeout = time.Duration(translateConf.Translator.Timeout) * time.Second
+	// No need to validate default config here
+	ts.defaultTranslatorConfig = conf.DefaultTranslatorConfig
 
-	if translateConf.Translator.RateLimit.RefillTPS == 0.0 {
-		err = fmt.Errorf("translator limiter refill rate is zero")
+	if conf.GlobalRateLimit.RefillTPS <= 0.0 {
+		err = fmt.Errorf("translator limiter refill rate must be positive")
 		return
 	}
 
-	if translateConf.Translator.RateLimit.BucketSize == 0 {
-		err = fmt.Errorf("translator limiter bucket size is zero")
+	if conf.GlobalRateLimit.BucketSize <= 0 {
+		err = fmt.Errorf("translator limiter bucket size must be positive")
 		return
 	}
-	c.limiter = rate.NewLimiter(
-		rate.Limit(translateConf.Translator.RateLimit.RefillTPS),
-		translateConf.Translator.RateLimit.BucketSize,
+
+	ts.limiter = rate.NewLimiter(
+		rate.Limit(conf.GlobalRateLimit.RefillTPS),
+		conf.GlobalRateLimit.BucketSize,
 	)
-
-	logrus.Infof("using model: %s, api url: %s", translateConf.Translator.Model, translateConf.Translator.Endpoint)
 	logrus.Infof(
-		"rate limiter refill: %.2f tokens/s, bucket size: %d",
-		translateConf.Translator.RateLimit.RefillTPS,
-		translateConf.Translator.RateLimit.BucketSize,
+		"global rate limiter refill: %.2f tokens/s, bucket size: %d",
+		conf.GlobalRateLimit.RefillTPS,
+		conf.GlobalRateLimit.BucketSize,
 	)
 
 	allLanguages := map[string]lingua.Language{}
@@ -199,7 +141,7 @@ func newOpenAITranslator(translateConf TranslateConfig) (c *OpenAITranslator, er
 		allLanguages[l.IsoCode639_1().String()] = l
 	}
 
-	for _, code := range translateConf.DetectLangs {
+	for _, code := range conf.DetectLangs {
 		if l, ok := allLanguages[code]; ok {
 			logrus.Infof("found detect language: %s", code)
 			availableLangs = append(availableLangs, l)
@@ -209,49 +151,93 @@ func newOpenAITranslator(translateConf TranslateConfig) (c *OpenAITranslator, er
 		}
 	}
 
-	c.detectorBuilder = lingua.NewLanguageDetectorBuilder().
+	ts.detectorBuilder = lingua.NewLanguageDetectorBuilder().
 		FromLanguages(availableLangs...)
+	ts.detector = ts.detectorBuilder.Build()
+
+	// Initialize translators
+	err = ts.initTranslators(conf.Translators)
 	return
 }
 
-// Translate sends the given text to the OpenAI API for translation.
-// It respects the configured timeout and rate limiter.
-// Returns the API's chat completion response or an error.
-func (t *OpenAITranslator) Translate(text, chatIdStr string) (chatCompletion *openai.ChatCompletion, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+func (ts *TranslateService) initTranslators(translatorConfs []TranslatorInstanceConfig) (err error) {
+	for _, tc := range translatorConfs {
+		tc.CheckAndMergeDefaultConfig(ts.defaultTranslatorConfig)
+
+		var instance TranslatorInstance
+		switch tc.Type {
+		case translatorInstanceTypeOpenAI:
+			instance, err = newOpenAITranslator(tc)
+		default:
+			err = fmt.Errorf("unknown translator type: %s", tc.Type)
+		}
+
+		if err != nil {
+			return
+		}
+		ts.translators = append(ts.translators, instance)
+		logrus.Infof("initialized translator '%s', type: %s", tc.Name, tc.Type)
+	}
+	return
+}
+
+// DetectLang attempts to detect the language of the given text.
+// It returns the detected language (ISO 639-1 code), the confidence score,
+// and an error if the detected language is not supported or confidence is too low.
+func (ts *TranslateService) DetectLang(text string) (lang string, confidence float64, err error) {
+	for _, cv := range ts.detector.ComputeLanguageConfidenceValues(text) {
+		l := cv.Language().IsoCode639_1().String()
+		c := cv.Value()
+		if c > confidence {
+			lang = l
+			confidence = c
+		}
+	}
+
+	if !slices.Contains(ts.sourceLangConf.Langs, lang) ||
+		confidence < ts.sourceLangConf.ConfidenceThreshold {
+		err = fmt.Errorf("supported language not detected")
+	}
+
+	return
+}
+
+func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResponse, err error) {
+	// TODO: WRR
+	translator := ts.translators[0]
+
+	ctx, cancel := context.WithTimeout(context.Background(), translationLimiterWaitSeconds*time.Second)
 	defer cancel()
 
-	logrus.Trace("wating for limiter")
-	metricTranslationTasks.WithLabelValues(translationStatePending, chatIdStr).Inc()
-	err = t.limiter.Wait(ctx)
-	metricTranslationTasks.WithLabelValues(translationStatePending, chatIdStr).Dec()
+	logger := logrus.WithField("chat_id", req.ChatId)
+
+	logger.Trace("wating for global limiter")
+	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Inc()
+	err = ts.limiter.Wait(ctx)
+	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Dec()
 	if err != nil {
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
-	metricTranslationTasks.WithLabelValues(translationStateProcessing, chatIdStr).Inc()
-	defer metricTranslationTasks.WithLabelValues(translationStateProcessing, chatIdStr).Dec()
+	metricTranslationTasks.WithLabelValues(translationStateProcessing, req.ChatType).Inc()
+	defer metricTranslationTasks.WithLabelValues(translationStateProcessing, req.ChatType).Dec()
 
-	logrus.Trace("wating for translate response")
-	chatCompletion, err = t.aiClient.Chat.Completions.New(
-		ctx,
-		openai.ChatCompletionNewParams{
-			Model: t.model,
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(t.systemPrompt),
-				openai.UserMessage(text),
-			},
-		},
-	)
-	return
-}
+	logger.Trace("wating for translate response")
+	resp, err = translator.Translate(req.Text)
+	if resp != nil {
+		metricTranslationTokensUsed.WithLabelValues(
+			translationTokenUsedTypeCompletion,
+			req.ChatType,
+		).Add(float64(resp.TokenUsage.Completion))
+		metricTranslationTokensUsed.WithLabelValues(
+			translationTokenUsedTypePrompt,
+			req.ChatType,
+		).Add(float64(resp.TokenUsage.Prompt))
+	}
 
-// ParseChatResponse extracts the translated text content from an OpenAI ChatCompletion response.
-// Returns the translated text or an error if no suitable choice is found in the response.
-func (t *OpenAITranslator) ParseChatResponse(chatCompletion *openai.ChatCompletion) (ret string, err error) {
-	if len(chatCompletion.Choices) > 0 {
-		ret = chatCompletion.Choices[0].Message.Content
+	if err != nil {
+		metricTranslationTasks.WithLabelValues(translationStateFailed, req.ChatType).Inc()
 		return
 	}
-	err = fmt.Errorf("no choice found in response")
+	metricTranslationTasks.WithLabelValues(translationStateSuccess, req.ChatType).Inc()
 	return
 }

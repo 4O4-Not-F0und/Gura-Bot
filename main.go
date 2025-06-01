@@ -24,7 +24,7 @@ func init() {
 
 	logrus.SetOutput(os.Stdout)
 	logrus.SetFormatter(&logrus.TextFormatter{
-		TimestampFormat:        time.RFC3339,
+		TimestampFormat:        time.RFC3339Nano,
 		DisableColors:          true,
 		DisableLevelTruncation: true,
 		ForceQuote:             true,
@@ -47,12 +47,12 @@ func main() {
 
 	initMetricServer(appConfig.Metric)
 
-	translator, err := newOpenAITranslator(appConfig.Translate)
+	translateService, err := newTranslateService(appConfig.TranslateService)
 	if err != nil {
 		logrus.Fatal(err)
 	}
 
-	bot, err := newBot(appConfig.Bot, translator)
+	bot, err := newBot(appConfig.Bot, translateService)
 	if err != nil {
 		logrus.Fatal(err)
 	}
@@ -93,13 +93,13 @@ func handleSignals(bot *Bot) {
 					continue
 				}
 
-				translator, err := newOpenAITranslator(appConfig.Translate)
+				translateService, err := newTranslateService(appConfig.TranslateService)
 				if err != nil {
 					logrus.Error(err)
 					continue
 				}
 
-				err = bot.ReloadConfig(appConfig.Bot, translator)
+				err = bot.ReloadConfig(appConfig.Bot, translateService)
 				if err != nil {
 					logrus.Error(err)
 					continue

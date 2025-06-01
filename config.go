@@ -8,16 +8,16 @@ import (
 )
 
 type Config struct {
-	Bot       BotConfig       `yaml:"bot"`
-	LogLevel  string          `yaml:"log_level"`
-	Translate TranslateConfig `yaml:"translate"`
-	Metric    MetricConfig    `yaml:"metric"`
+	Bot              BotConfig              `yaml:"bot"`
+	LogLevel         string                 `yaml:"log_level"`
+	TranslateService TranslateServiceConfig `yaml:"translate_service"`
+	Metric           MetricConfig           `yaml:"metric"`
 }
 
 func newConfig() *Config {
 	return &Config{
-		Bot:       newBotConfig(),
-		Translate: newTranslateConfig(),
+		Bot:              newBotConfig(),
+		TranslateService: newTranslateServiceConfig(),
 	}
 }
 
