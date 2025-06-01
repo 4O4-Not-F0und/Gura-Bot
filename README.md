@@ -30,6 +30,9 @@ To reload the configuration, send a `SIGHUP` signal to the running bot process:
 
 ```bash
 killall -s HUP telegram_translate_bot
+
+# or use predefined script
+docker exec -it <CONTAINER NAME OR HASH> reload.sh
 ```
 
 Upon receiving the `SIGHUP` signal, the bot will attempt to reload its configuration from the `config.yml` file.
