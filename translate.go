@@ -87,13 +87,13 @@ type TranslateService struct {
 	detectorBuilder         lingua.LanguageDetectorBuilder
 	defaultTranslatorConfig DefaultTranslatorConfig
 	detector                lingua.LanguageDetector
-	translators             []TranslatorInstance
+	translatorEntry         TranslatorEntry
 	limiter                 *rate.Limiter
 }
 
 func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
 	ts = &TranslateService{
-		translators: make([]TranslatorInstance, 0),
+		translatorEntry: newWeightedTranslatorEntry(),
 	}
 
 	if len(conf.DetectLangs) == 0 {
@@ -156,13 +156,21 @@ func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 	ts.detector = ts.detectorBuilder.Build()
 
 	// Initialize translators
-	err = ts.initTranslators(conf.Translators)
+	err = ts.initTranslatorEntries(conf.Translators)
 	return
 }
 
-func (ts *TranslateService) initTranslators(translatorConfs []TranslatorInstanceConfig) (err error) {
+func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorInstanceConfig) (err error) {
+	if len(translatorConfs) == 0 {
+		err = fmt.Errorf("no translator configured")
+		return
+	}
+
 	for _, tc := range translatorConfs {
-		tc.CheckAndMergeDefaultConfig(ts.defaultTranslatorConfig)
+		err = tc.CheckAndMergeDefaultConfig(ts.defaultTranslatorConfig)
+		if err != nil {
+			return
+		}
 
 		var instance TranslatorInstance
 		switch tc.Type {
@@ -175,9 +183,10 @@ func (ts *TranslateService) initTranslators(translatorConfs []TranslatorInstance
 		if err != nil {
 			return
 		}
-		ts.translators = append(ts.translators, instance)
-		logrus.Infof("initialized translator '%s', type: %s", tc.Name, tc.Type)
+
+		ts.translatorEntry.AddInstance(instance, tc.Weight)
 	}
+	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalWeight())
 	return
 }
 
@@ -203,13 +212,19 @@ func (ts *TranslateService) DetectLang(text string) (lang string, confidence flo
 }
 
 func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResponse, err error) {
-	// TODO: WRR
-	translator := ts.translators[0]
+	translator, err := ts.translatorEntry.Translator()
+	if err != nil {
+		err = fmt.Errorf("error on select translator: %w", err)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), translationLimiterWaitSeconds*time.Second)
 	defer cancel()
 
-	logger := logrus.WithField("chat_id", req.ChatId)
+	logger := logrus.WithFields(logrus.Fields{
+		"chat_id":         req.ChatId,
+		"translator_name": translator.Name(),
+	})
 
 	logger.Trace("wating for global limiter")
 	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Inc()

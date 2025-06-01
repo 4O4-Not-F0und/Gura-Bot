@@ -93,7 +93,7 @@ type Bot struct {
 	messageSettings  BotMessageSettings
 	allowedChats     *SafeSlice[int64]
 	workerPoolSize   int
-	reloadConfigMux  *sync.Mutex
+	configMu         *sync.RWMutex
 }
 
 func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err error) {
@@ -113,9 +113,11 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 	}
 	logrus.Infof("authorized on account: %s", botApi.Self.UserName)
 
-	if logrus.StandardLogger().Level >= logrus.DebugLevel {
-		botApi.Debug = true
-	}
+	/*
+		if logrus.StandardLogger().Level >= logrus.DebugLevel {
+			botApi.Debug = true
+		}
+	*/
 
 	bot = &Bot{
 		bot:              botApi,
@@ -123,7 +125,7 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 		messageSettings:  config.MessageSettings,
 		allowedChats:     newSafeSlice(config.AllowedChats),
 		workerPoolSize:   config.WorkerPoolSize,
-		reloadConfigMux:  &sync.Mutex{},
+		configMu:         &sync.RWMutex{},
 	}
 	err = bot.ReloadConfig(config, translateService)
 	if err != nil {
@@ -135,9 +137,9 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 }
 
 func (b *Bot) ReloadConfig(botConfig BotConfig, translateService *TranslateService) (err error) {
-	logrus.Trace("acquiring bot.reloadConfigMux")
-	b.reloadConfigMux.Lock()
-	logrus.Trace("acquired bot.reloadConfigMux")
+	logrus.Trace("acquiring bot.configMu")
+	b.configMu.Lock()
+	logrus.Trace("acquired bot.configMu")
 
 	b.allowedChats.New(botConfig.AllowedChats)
 	b.messageSettings = botConfig.MessageSettings
@@ -146,8 +148,8 @@ func (b *Bot) ReloadConfig(botConfig BotConfig, translateService *TranslateServi
 		logrus.Warn("worker pool size changed, please restart bot to apply")
 	}
 
-	b.reloadConfigMux.Unlock()
-	logrus.Trace("released bot.reloadConfigMux")
+	b.configMu.Unlock()
+	logrus.Trace("released bot.configMu")
 	return
 }
 
@@ -238,8 +240,10 @@ func (b *Bot) handleMessage(msg *Message) {
 	})
 
 	reply := tgbotapi.NewMessage(msg.Chat.ID, resp.Text)
+	b.configMu.RLock()
 	reply.DisableNotification = b.messageSettings.DisableNotification
 	reply.DisableWebPagePreview = b.messageSettings.DisableLinkPreview
+	b.configMu.RUnlock()
 	reply.ReplyToMessageID = msg.MessageID
 
 	_, err = b.bot.Send(reply)
