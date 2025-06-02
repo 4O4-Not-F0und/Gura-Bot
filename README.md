@@ -1,3 +1,5 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/4O4-Not-F0und/Telegram-Translate-Bot)](https://goreportcard.com/report/github.com/4O4-Not-F0und/Telegram-Translate-Bot)
+
 # Telegram Translate Bot
 
 Telegram-Translate-Bot is a Go-based Telegram bot that automatically detects the language of incoming messages in specified chats and translates them into any configured languages using an OpenAI-compatible API.

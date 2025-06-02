@@ -256,7 +256,7 @@ func (b *Bot) handleMessage(msg *Message) {
 			msg.logger.Debugf("http request: %s", base64.StdEncoding.EncodeToString(te.DumpRequest(true)))
 			msg.logger.Debugf("http response: %s", base64.StdEncoding.EncodeToString(te.DumpResponse(true)))
 		}
-		msg.logger.Errorf("an error occured while translating: %v", err)
+		msg.logger.Errorf("an error occurred while translating: %v", err)
 		return
 	}
 
@@ -275,7 +275,7 @@ func (b *Bot) handleMessage(msg *Message) {
 	_, err = b.bot.Send(reply)
 	if err != nil {
 		msg.onMessageHandleFailed()
-		msg.logger.Errorf("an error occured while replying message: %v", err)
+		msg.logger.Errorf("an error occurred while replying message: %v", err)
 	}
 	msg.logger.Info("completed")
 	msg.onSuccess()
