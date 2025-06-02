@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/base64"
+	"errors"
 	"slices"
-	"strconv"
+	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
@@ -16,7 +18,25 @@ const (
 	messageHandleStateProcessing   = "processing"
 )
 
+var (
+	allMessageStates = []string{
+		messageHandleStatePending,
+		messageHandleStateUnauthorized,
+		messageHandleStateProcessing,
+		messageHandleStateProcessed,
+		messageHandleStateFailed,
+	}
+
+	allChatTypes = []string{
+		"private",
+		"group",
+		"supergroup",
+		"channel",
+	}
+)
+
 type BotConfig struct {
+	Debug           bool               `yaml:"debug"`
 	Token           string             `yaml:"token"`
 	MessageSettings BotMessageSettings `yaml:"message_settings"`
 	AllowedChats    []int64            `yaml:"allowed_chats"`
@@ -35,15 +55,51 @@ func newBotConfig() BotConfig {
 	}
 }
 
-type Bot struct {
-	bot             *tgbotapi.BotAPI
-	translator      *OpenAITranslator
-	messageSettings BotMessageSettings
-	allowedChats    []int64
-	workerPoolSize  int
+type SafeSlice[T comparable] struct {
+	*sync.RWMutex
+	s []T
 }
 
-func newBot(config BotConfig, translator *OpenAITranslator) (bot *Bot, err error) {
+func newSafeSlice[T comparable](s []T) (ss *SafeSlice[T]) {
+	ss = &SafeSlice[T]{
+		RWMutex: new(sync.RWMutex),
+	}
+	ss.New(s)
+	return
+}
+
+func (ss *SafeSlice[T]) Contains(elem T) bool {
+	ss.RLock()
+	ok := slices.Contains(ss.s, elem)
+	ss.RUnlock()
+	return ok
+}
+
+func (ss *SafeSlice[T]) New(s []T) {
+	ss.Lock()
+	ss.s = slices.Clone(s)
+	ss.Unlock()
+}
+
+func (ss *SafeSlice[T]) Clone() (s []T) {
+	ss.RLock()
+	s = slices.Clone(ss.s)
+	ss.RUnlock()
+	return
+}
+
+type Bot struct {
+	bot              *tgbotapi.BotAPI
+	updatesChan      tgbotapi.UpdatesChannel
+	translateService *TranslateService
+	messageSettings  BotMessageSettings
+	allowedChats     *SafeSlice[int64]
+	workerPoolSize   int
+	configMu         *sync.RWMutex
+	stopServeNotify  chan int
+}
+
+func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err error) {
 	if config.Token == "" {
 		logrus.Fatal("telegram bot token required")
 	}
@@ -59,156 +115,185 @@ func newBot(config BotConfig, translator *OpenAITranslator) (bot *Bot, err error
 		return
 	}
 	logrus.Infof("authorized on account: %s", botApi.Self.UserName)
+	botApi.Debug = config.Debug
 
-	if logrus.StandardLogger().Level >= logrus.DebugLevel {
-		botApi.Debug = true
-	}
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+	updates := botApi.GetUpdatesChan(u)
 
 	bot = &Bot{
-		bot:             botApi,
-		translator:      translator,
-		messageSettings: config.MessageSettings,
-		allowedChats:    config.AllowedChats,
-		workerPoolSize:  config.WorkerPoolSize,
+		bot:              botApi,
+		updatesChan:      updates,
+		translateService: translateService,
+		messageSettings:  config.MessageSettings,
+		allowedChats:     newSafeSlice(config.AllowedChats),
+		workerPoolSize:   config.WorkerPoolSize,
+		configMu:         &sync.RWMutex{},
+		stopServeNotify:  make(chan int, 1),
 	}
+
+	_, err = bot.loadConfig(config, translateService)
+	if err != nil {
+		return
+	}
+
+	bot.initMessageMetrics()
+	return
+}
+
+func (b *Bot) loadConfig(botConfig BotConfig, translateService *TranslateService) (reServeRequired bool, err error) {
+	logrus.Trace("acquiring bot.configMu")
+	b.configMu.Lock()
+	logrus.Trace("acquired bot.configMu")
+
+	b.allowedChats.New(botConfig.AllowedChats)
+	b.messageSettings = botConfig.MessageSettings
+	b.translateService = translateService
+	reServeRequired = b.workerPoolSize != botConfig.WorkerPoolSize
+	b.workerPoolSize = botConfig.WorkerPoolSize
+
+	b.configMu.Unlock()
+	logrus.Trace("released bot.configMu")
+	return
+}
+
+func (b *Bot) Reload(botConfig BotConfig, translateService *TranslateService) (err error) {
+	var reServeRequired bool
+	reServeRequired, err = b.loadConfig(botConfig, translateService)
+	if err != nil {
+		return
+	}
+
+	if reServeRequired {
+		logrus.Info("re-serve bot required, attempting to restart bot loop")
+		b.stopServeNotify <- 1
+		go b.ServeBot()
+	}
+
 	return
 }
 
 // ServeBot starts the bot's main loop for receiving and processing updates.
 func (b *Bot) ServeBot() {
 	q := make(chan int, b.workerPoolSize)
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := b.bot.GetUpdatesChan(u)
 
-	logrus.Infof("begin update loop, timeout: %ds, queue size: %d", u.Timeout, b.workerPoolSize)
-	for update := range updates {
-		var msg *tgbotapi.Message
+	logrus.Infof("begin update loop, queue size: %d", b.workerPoolSize)
+	defer func() {
+		logrus.Info("stopped update loop")
+	}()
+	for update := range b.updatesChan {
+		select {
+		case <-b.stopServeNotify:
+			return
+		default:
+		}
+
+		var msg *Message
 		if update.Message != nil {
-			msg = update.Message
+			msg = newMessage(update.Message)
 		} else if update.ChannelPost != nil {
-			msg = update.ChannelPost
+			msg = newMessage(update.ChannelPost)
 		} else {
 			continue
 		}
 
-		chatIdStr := "unknown"
-		if msg.Chat != nil {
-			chatIdStr = strconv.FormatInt(msg.Chat.ID, 10)
-		}
-
-		var text string
-		if len(msg.Text) > 0 {
-			text = msg.Text
-		} else if len(msg.Caption) > 0 {
-			text = msg.Caption
-		} else {
-			logrus.WithField("chat_id", chatIdStr).Debug("message text undetected")
+		if msg.Content == "" {
+			msg.logger.Debug("message text undetected")
 			continue
 		}
 
-		metricMessages.WithLabelValues(messageHandleStatePending, chatIdStr).Inc()
+		msg.onPending()
 		logrus.Trace("acquiring queue")
 		q <- 1
-		metricMessages.WithLabelValues(messageHandleStatePending, chatIdStr).Dec()
+		msg.onProcessing()
 		logrus.Trace("acquired queue")
-		go func(m *tgbotapi.Message, t, c string) {
-			metricMessages.WithLabelValues(messageHandleStateProcessing, chatIdStr).Inc()
-			b.handleMessage(m, t, c)
+
+		go func(m *Message) {
+			b.handleMessage(m)
 			<-q
 			logrus.Trace("released queue")
-			metricMessages.WithLabelValues(messageHandleStateProcessing, chatIdStr).Dec()
-		}(msg, text, chatIdStr)
+		}(msg)
 	}
 }
 
 // handleMessage processes a single incoming Telegram message.
 // It checks for authorization, extracts text, detects language,
 // translates, and sends a reply.
-func (b *Bot) handleMessage(message *tgbotapi.Message, text, chatIdStr string) {
-	logger := logrus.WithField("chat_id", chatIdStr)
-
+func (b *Bot) handleMessage(msg *Message) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Errorf("panic recovered in handleMessage: %v", r)
-			b.onMessageHandleFailed(chatIdStr)
+			msg.logger.Errorf("panic recovered in handleMessage: %v", r)
+			msg.onMessageHandleFailed()
 		}
 	}()
 
-	if message.From != nil {
-		logger = logger.WithField("user_id", message.From.ID)
-	}
-
-	if !b.isAllowed(message) {
-		metricMessages.WithLabelValues(messageHandleStateUnauthorized, chatIdStr).Inc()
-		logger.Infoln("disallowed message source")
+	if !b.isAllowed(msg) {
+		msg.onUnauthorized()
 		return
 	}
 
-	lang, confidence, err := b.translator.DetectLang(text)
-	logger = logger.WithFields(logrus.Fields{
+	lang, confidence, err := b.translateService.DetectLang(msg.Content)
+	msg.logger = msg.logger.WithFields(logrus.Fields{
 		"lang":            lang,
 		"lang_confidence": confidence,
 	})
 	if err != nil {
-		logger.Warn(err)
-		b.onMessageHandleFailed(chatIdStr)
+		msg.logger.Warn(err)
+		msg.onMessageHandleFailed()
 		return
 	}
 
-	resp, err := b.translator.Translate(text, chatIdStr)
-	if err != nil {
-		b.onTranslationFailed(chatIdStr)
-		logger.Errorf("an error occured while translating: %v", err)
-		return
-	}
-	logger = logger.WithFields(logrus.Fields{
-		"usage_completion_tokens": resp.Usage.CompletionTokens,
-		"usage_prompt_tokens":     resp.Usage.PromptTokens,
+	resp, err := b.translateService.Translate(TranslateRequest{
+		Text:    msg.Content,
+		TraceId: msg.TraceId,
 	})
-	metricTranslationTokensUsed.WithLabelValues(
-		translationTokenUsedTypeCompletion,
-		chatIdStr,
-	).Add(float64(resp.Usage.CompletionTokens))
-	metricTranslationTokensUsed.WithLabelValues(
-		translationTokenUsedTypePrompt,
-		chatIdStr,
-	).Add(float64(resp.Usage.PromptTokens))
-
-	translatedText, err := b.translator.ParseChatResponse(resp)
+	msg.logger = msg.logger.WithField("translator_name", resp.TranslatorName)
 	if err != nil {
-		b.onTranslationFailed(chatIdStr)
-		logger.Errorf("an error occured while parsing chat response: %v", err)
+		msg.onMessageHandleFailed()
+
+		var te = new(TranslateError)
+		if errors.As(err, &te) {
+			msg.logger.Debugf("http request: %s", base64.StdEncoding.EncodeToString(te.DumpRequest(true)))
+			msg.logger.Debugf("http response: %s", base64.StdEncoding.EncodeToString(te.DumpResponse(true)))
+		}
+		msg.logger.Errorf("an error occured while translating: %v", err)
 		return
 	}
-	metricTranslationTasks.WithLabelValues(translationStateSuccess, chatIdStr).Inc()
 
-	msg := tgbotapi.NewMessage(message.Chat.ID, translatedText)
-	msg.DisableNotification = b.messageSettings.DisableNotification
-	msg.DisableWebPagePreview = b.messageSettings.DisableLinkPreview
-	msg.ReplyToMessageID = message.MessageID
+	msg.logger = msg.logger.WithFields(logrus.Fields{
+		"usage_completion_tokens": resp.TokenUsage.Completion,
+		"usage_prompt_tokens":     resp.TokenUsage.Prompt,
+	})
 
-	_, err = b.bot.Send(msg)
+	reply := tgbotapi.NewMessage(msg.Chat.ID, resp.Text)
+	b.configMu.RLock()
+	reply.DisableNotification = b.messageSettings.DisableNotification
+	reply.DisableWebPagePreview = b.messageSettings.DisableLinkPreview
+	b.configMu.RUnlock()
+	reply.ReplyToMessageID = msg.MessageID
+
+	_, err = b.bot.Send(reply)
 	if err != nil {
-		b.onMessageHandleFailed(chatIdStr)
-		logger.Errorf("an error occured while sending message: %v", err)
+		msg.onMessageHandleFailed()
+		msg.logger.Errorf("an error occured while replying message: %v", err)
 	}
-	logger.Info("completed")
-	metricMessages.WithLabelValues(messageHandleStateProcessed, chatIdStr).Inc()
+	msg.logger.Info("completed")
+	msg.onSuccess()
 }
 
-func (b *Bot) onTranslationFailed(chatIdStr string) {
-	b.onMessageHandleFailed(chatIdStr)
-	metricTranslationTasks.WithLabelValues(translationStateFailed, chatIdStr).Inc()
+func (b *Bot) initMessageMetrics() {
+	for _, ct := range allChatTypes {
+		for _, state := range allMessageStates {
+			metricMessages.WithLabelValues(state, ct).Set(0)
+		}
+	}
+
+	logrus.Info("all bot metrics initialized")
 }
 
-func (b *Bot) onMessageHandleFailed(chatIdStr string) {
-	metricMessages.WithLabelValues(messageHandleStateFailed, chatIdStr).Inc()
-}
-
-func (b *Bot) isAllowed(message *tgbotapi.Message) bool {
+func (b *Bot) isAllowed(message *Message) bool {
 	if message.Chat.Type == "private" {
-		return slices.Contains(b.allowedChats, message.From.ID)
+		return b.allowedChats.Contains(message.From.ID)
 	}
-	return slices.Contains(b.allowedChats, message.Chat.ID)
+	return b.allowedChats.Contains(message.Chat.ID)
 }

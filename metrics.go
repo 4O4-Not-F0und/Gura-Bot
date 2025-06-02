@@ -25,34 +25,55 @@ var (
 	metricMessages = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
-			Name:      "messages",
+			Name:      "messages_total",
 			Help:      "Current number of messages being processed by the bot.",
 		},
-		[]string{"state", "chat_id"},
+		[]string{"state", "chat_type"},
 	)
 
 	// States: "pending" (waiting for rate limiter),
 	//         "processing" (waiting for translation API response),
 	//         "success" (translation and parsing successful),
 	//         "failed" (any step in translation failed).
-	metricTranslationTasks = promauto.NewGaugeVec(
+	metricTranslatorTasks = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
-			Name:      "translation_tasks_total",
+			Name:      "translator_tasks_total",
 			Help:      "Total number of translation tasks, by state.",
 		},
-		[]string{"state", "chat_id"},
+		[]string{"state", "translator_name"},
 	)
 
 	// Types: "completion" (output tokens)
 	// 		  "prompt" (input tokens)
-	metricTranslationTokensUsed = promauto.NewCounterVec(
+	metricTranslatorTokensUsed = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
-			Name:      "translation_tokens_used",
+			Name:      "translator_tokens_used",
 			Help:      "Used tokens of translation tasks.",
 		},
-		[]string{"type", "chat_id"},
+		[]string{"token_type", "translator_name"},
+	)
+
+	// Gauge for translator up status
+	// Value is 1 if the translator is up, 0 if it is disabled.
+	metricTranslatorUp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "translator_up",
+			Help:      "Indicates if a translator is currently up and operational. 1 for up, 0 for disabled.",
+		},
+		[]string{"translator_name"},
+	)
+
+	// Gauge for translator selected times
+	metricTranslatorSelectionTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "translator_selection_total",
+			Help:      "Times of translator instance was chosen.",
+		},
+		[]string{"translator_name"},
 	)
 )
 

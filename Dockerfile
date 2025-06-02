@@ -14,6 +14,7 @@ FROM alpine:latest AS runner
 WORKDIR /telegram_translate_bot
 COPY --from=builder /telegram_translate_bot/telegram_translate_bot .
 COPY --from=builder /telegram_translate_bot/config.example.yml config.yml
+COPY --from=builder --chmod=0755 /telegram_translate_bot/scripts/reload.sh /usr/sbin/reload.sh
 
 EXPOSE 9091/tcp
 

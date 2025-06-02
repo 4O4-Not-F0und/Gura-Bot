@@ -1,4 +1,4 @@
-module telegram-translate-bot
+module github.com/4O4-Not-F0und/Telegram-Translate-Bot
 
 go 1.24.3
 

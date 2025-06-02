@@ -4,21 +4,20 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Bot       BotConfig       `yaml:"bot"`
-	LogLevel  string          `yaml:"log_level"`
-	Translate TranslateConfig `yaml:"translate"`
-	Metric    MetricConfig    `yaml:"metric"`
+	Bot              BotConfig              `yaml:"bot"`
+	LogLevel         string                 `yaml:"log_level"`
+	TranslateService TranslateServiceConfig `yaml:"translate_service"`
+	Metric           MetricConfig           `yaml:"metric"`
 }
 
 func newConfig() *Config {
 	return &Config{
-		Bot:       newBotConfig(),
-		Translate: newTranslateConfig(),
+		Bot:              newBotConfig(),
+		TranslateService: newTranslateServiceConfig(),
 	}
 }
 
@@ -38,7 +37,5 @@ func loadConfig(configFile string) (cfg *Config, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse '%s' failed: %w", configFile, err)
 	}
-
-	logrus.Infof("loaded config from '%s'", configFile)
 	return
 }
