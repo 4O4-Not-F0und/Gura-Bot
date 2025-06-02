@@ -10,7 +10,6 @@ import (
 
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -21,8 +20,6 @@ const (
 
 	translationTokenUsedTypeCompletion = "completion"
 	translationTokenUsedTypePrompt     = "prompt"
-
-	translationLimiterWaitSeconds = 30
 )
 
 var (
@@ -77,7 +74,7 @@ func (r *TranslateError) Error() string {
 }
 
 type TranslatorInstance interface {
-	Translate(string) (*TranslateResponse, error)
+	Translate(context.Context, string) (*TranslateResponse, error)
 	Name() string
 }
 
@@ -91,7 +88,6 @@ type TranslateService struct {
 	defaultTranslatorConfig DefaultTranslatorConfig
 	detector                lingua.LanguageDetector
 	translatorEntry         TranslatorEntry
-	limiter                 *rate.Limiter
 }
 
 func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
@@ -124,26 +120,6 @@ func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 
 	// No need to validate default config here
 	ts.defaultTranslatorConfig = conf.DefaultTranslatorConfig
-
-	if conf.GlobalRateLimit.RefillTPS <= 0.0 {
-		err = fmt.Errorf("translator limiter refill rate must be positive")
-		return
-	}
-
-	if conf.GlobalRateLimit.BucketSize <= 0 {
-		err = fmt.Errorf("translator limiter bucket size must be positive")
-		return
-	}
-
-	ts.limiter = rate.NewLimiter(
-		rate.Limit(conf.GlobalRateLimit.RefillTPS),
-		conf.GlobalRateLimit.BucketSize,
-	)
-	logrus.Infof(
-		"global rate limiter refill: %.2f tokens/s, bucket size: %d",
-		conf.GlobalRateLimit.RefillTPS,
-		conf.GlobalRateLimit.BucketSize,
-	)
 
 	allLanguages := map[string]lingua.Language{}
 	availableLangs := []lingua.Language{}
@@ -203,20 +179,15 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 
 		names = append(names, instance.Name())
 		ts.translatorEntry.AddInstance(TranslatorEntryInstanceOptions{
-			Instance:        instance,
-			Weight:          tc.Weight,
-			UpMetric:        metricTranslatorUp,
-			SelectionMetric: metricTranslatorSelectionTotal,
-			FailoverConfig:  tc.Failover,
+			Instance:         instance,
+			Timeout:          tc.Timeout,
+			Weight:           tc.Weight,
+			UpMetric:         metricTranslatorUp,
+			SelectionMetric:  metricTranslatorSelectionTotal,
+			TasksMetric:      metricTranslatorTasks,
+			TokensUsedMetric: metricTranslatorTokensUsed,
+			FailoverConfig:   tc.Failover,
 		})
-
-		for _, state := range allTranslationTaskStates {
-			metricTranslatorTasks.WithLabelValues(state, instance.Name()).Add(0.0)
-		}
-
-		for _, t := range allTranslationTokenUsedTypes {
-			metricTranslatorTokensUsed.WithLabelValues(t, instance.Name()).Add(0.0)
-		}
 	}
 	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalConfigWeight())
 	return
@@ -269,37 +240,9 @@ func (ts *TranslateService) translate(req TranslateRequest, logger *logrus.Entry
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), translationLimiterWaitSeconds*time.Second)
-	defer cancel()
-
-	tName := translator.InstanceName()
-	logger = logger.WithField("translator_name", tName)
-
-	logger.Trace("wating for global limiter")
-	metricTranslatorTasks.WithLabelValues(translationStatePending, tName).Inc()
-	err = ts.limiter.Wait(ctx)
-	metricTranslatorTasks.WithLabelValues(translationStatePending, tName).Dec()
-	if err != nil {
-		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
-	}
-	metricTranslatorTasks.WithLabelValues(translationStateProcessing, tName).Inc()
-	defer metricTranslatorTasks.WithLabelValues(translationStateProcessing, tName).Dec()
-
-	logger.Trace("wating for translate response")
 	resp, err = translator.Translate(req.Text)
-	if resp != nil {
-		metricTranslatorTokensUsed.WithLabelValues(
-			translationTokenUsedTypeCompletion, tName,
-		).Add(float64(resp.TokenUsage.Completion))
-		metricTranslatorTokensUsed.WithLabelValues(
-			translationTokenUsedTypePrompt, tName,
-		).Add(float64(resp.TokenUsage.Prompt))
-	}
-
 	if err != nil {
-		metricTranslatorTasks.WithLabelValues(translationStateFailed, tName).Inc()
 		return
 	}
-	metricTranslatorTasks.WithLabelValues(translationStateSuccess, tName).Inc()
 	return
 }

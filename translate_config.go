@@ -18,13 +18,6 @@ type TranslateServiceConfig struct {
 	SourceLang              SourceLanguageConfig       `yaml:"source_lang"`
 	Translators             []TranslatorInstanceConfig `yaml:"translators"`
 	DefaultTranslatorConfig DefaultTranslatorConfig    `yaml:"default_translator_config"`
-	GlobalRateLimit         TranslateRateLimitConfig   `yaml:"rate_limit"`
-}
-
-// TranslateRateLimitConfig defines the parameters for the rate limiter.
-type TranslateRateLimitConfig struct {
-	BucketSize int     `yaml:"bucket_size"`
-	RefillTPS  float64 `yaml:"refill_token_per_sec"`
 }
 
 // SourceLanguageConfig defines parameters for validating detected source languages.
@@ -71,24 +64,19 @@ type FailoverConfig struct {
 	MaxDisableCycles int `yaml:"max_disable_cycles"`
 }
 
-type DefaultTranslatorConfig struct {
-	// Required
-	Type string `yaml:"type"`
+// RateLimitConfig defines the parameters for the rate limiter.
+type RateLimitConfig struct {
+	Enabled    bool    `yaml:"enabled"`
+	BucketSize int     `yaml:"bucket_size"`
+	RefillTPS  float64 `yaml:"refill_token_per_sec"`
+}
 
+type DefaultTranslatorConfig struct {
 	// Postive
 	Weight int `yaml:"weight"`
 
 	// Optional
-	Model string `yaml:"model"`
-
-	// Optional
 	SystemPrompt string `yaml:"system_prompt"`
-
-	// Postive
-	Timeout int64 `yaml:"timeout"`
-
-	// Required
-	Endpoint string `yaml:"endpoint"`
 
 	// Optional. Failover
 	Failover FailoverConfig `yaml:"failover"`
@@ -100,8 +88,23 @@ type TranslatorInstanceConfig struct {
 	// Required
 	Name string `yaml:"name"`
 
+	// Required
+	Type string `yaml:"type"`
+
+	// Postive
+	Timeout int64 `yaml:"timeout"`
+
+	// Optional
+	Model string `yaml:"model"`
+
+	// Required
+	Endpoint string `yaml:"endpoint"`
+
 	// Optional
 	Token string `yaml:"token"`
+
+	// Optional
+	RateLimitConfig `yaml:"rate_limit"`
 }
 
 func (tic *TranslatorInstanceConfig) CheckAndMergeDefaultConfig(dtc DefaultTranslatorConfig) (err error) {
@@ -111,11 +114,8 @@ func (tic *TranslatorInstanceConfig) CheckAndMergeDefaultConfig(dtc DefaultTrans
 	}
 
 	if tic.Type == "" {
-		if dtc.Type == "" {
-			err = fmt.Errorf("translator type is required")
-			return
-		}
-		tic.Type = dtc.Type
+		err = fmt.Errorf("translator type is required")
+		return
 	}
 
 	if tic.Weight <= 0 {
@@ -126,24 +126,18 @@ func (tic *TranslatorInstanceConfig) CheckAndMergeDefaultConfig(dtc DefaultTrans
 		tic.Weight = dtc.Weight
 	}
 
-	if tic.Model == "" {
-		tic.Model = dtc.Model
-	}
-
 	if tic.SystemPrompt == "" {
 		tic.SystemPrompt = dtc.SystemPrompt
 	}
 
 	if tic.Timeout <= 0 {
-		if dtc.Timeout <= 0 {
-			err = fmt.Errorf("translator timeout must be positive")
-			return
-		}
-		tic.Timeout = dtc.Timeout
+		err = fmt.Errorf("translator timeout must be positive")
+		return
 	}
 
 	if tic.Endpoint == "" {
-		tic.Endpoint = dtc.Endpoint
+		err = fmt.Errorf("translator endpoint is required")
+		return
 	}
 
 	// Failover
@@ -168,5 +162,17 @@ func (tic *TranslatorInstanceConfig) CheckAndMergeDefaultConfig(dtc DefaultTrans
 			tic.Failover.MaxDisableCycles)
 	}
 
+	// Rate Limit
+	if tic.RateLimitConfig.Enabled {
+		if tic.RateLimitConfig.RefillTPS <= 0.0 {
+			err = fmt.Errorf("translator limiter refill rate must be positive")
+			return
+		}
+
+		if tic.RateLimitConfig.BucketSize <= 0 {
+			err = fmt.Errorf("translator limiter bucket size must be positive")
+			return
+		}
+	}
 	return
 }

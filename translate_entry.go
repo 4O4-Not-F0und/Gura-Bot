@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 type Translator interface {
@@ -20,10 +22,16 @@ type Translator interface {
 }
 
 type baseTranslator struct {
-	instance        TranslatorInstance
-	logger          *logrus.Entry
-	upMetric        *prometheus.GaugeVec
-	selectionMetric *prometheus.CounterVec
+	instance TranslatorInstance
+	logger   *logrus.Entry
+	limiter  *rate.Limiter
+	timeout  time.Duration
+
+	// Metrics
+	upMetric         *prometheus.GaugeVec
+	selectionMetric  *prometheus.CounterVec
+	tasksMetric      *prometheus.GaugeVec
+	tokensUsedMetric *prometheus.CounterVec
 
 	// Failover
 	failoverConfig            FailoverConfig
@@ -38,22 +46,79 @@ type baseTranslator struct {
 func newBaseTranslator(opts TranslatorEntryInstanceOptions) (bt *baseTranslator) {
 	bt = &baseTranslator{
 		instance:              opts.Instance,
+		timeout:               time.Duration(opts.Timeout) * time.Second,
 		failoverConfig:        opts.FailoverConfig,
 		upMetric:              opts.UpMetric,
 		selectionMetric:       opts.SelectionMetric,
+		tasksMetric:           opts.TasksMetric,
+		tokensUsedMetric:      opts.TokensUsedMetric,
 		failoverMu:            new(sync.Mutex),
 		isPermanentlyDisabled: false,
 	}
+	// Initialize metrics
 	bt.upMetric.WithLabelValues(bt.InstanceName()).Set(1)
 	bt.selectionMetric.WithLabelValues(bt.InstanceName()).Add(0.0)
+	for _, state := range allTranslationTaskStates {
+		bt.tasksMetric.WithLabelValues(state, bt.InstanceName()).Add(0.0)
+	}
+	for _, t := range allTranslationTokenUsedTypes {
+		bt.tokensUsedMetric.WithLabelValues(t, bt.InstanceName()).Add(0.0)
+	}
+
 	bt.logger = logrus.WithField("translator_name", bt.InstanceName())
 	bt.resetFailoverState()
+
+	// Initialize rate limiter
+	if opts.RateLimitConfig.Enabled {
+		bt.limiter = rate.NewLimiter(
+			rate.Limit(opts.RateLimitConfig.RefillTPS),
+			opts.RateLimitConfig.BucketSize,
+		)
+		bt.logger.Debugf(
+			"global rate limiter refill: %.2f tokens/s, bucket size: %d",
+			opts.RateLimitConfig.RefillTPS,
+			opts.RateLimitConfig.BucketSize,
+		)
+	}
+
+	return
+}
+
+func (bt *baseTranslator) wait(ctx context.Context) (err error) {
+	if bt.limiter != nil {
+		err = bt.limiter.Wait(ctx)
+	}
 	return
 }
 
 func (bt *baseTranslator) Translate(s string) (tr *TranslateResponse, err error) {
 	bt.selectionMetric.WithLabelValues(bt.InstanceName()).Inc()
-	tr, err = bt.instance.Translate(s)
+
+	ctx, cancel := context.WithTimeout(context.Background(), bt.timeout)
+	defer cancel()
+
+	bt.logger.Trace("wating for limiter")
+	bt.tasksMetric.WithLabelValues(translationStatePending, bt.InstanceName()).Inc()
+	err = bt.wait(ctx)
+	bt.tasksMetric.WithLabelValues(translationStatePending, bt.InstanceName()).Dec()
+	if err != nil {
+		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+	}
+
+	bt.tasksMetric.WithLabelValues(translationStateProcessing, bt.InstanceName()).Inc()
+	defer bt.tasksMetric.WithLabelValues(translationStateProcessing, bt.InstanceName()).Dec()
+
+	bt.logger.Trace("wating for translate response")
+	tr, err = bt.instance.Translate(ctx, s)
+	if tr != nil {
+		bt.tokensUsedMetric.WithLabelValues(
+			translationTokenUsedTypeCompletion, bt.InstanceName()).Add(
+			float64(tr.TokenUsage.Completion))
+		bt.tokensUsedMetric.WithLabelValues(
+			translationTokenUsedTypePrompt, bt.InstanceName()).Add(
+			float64(tr.TokenUsage.Prompt))
+	}
+
 	if err != nil {
 		bt.OnFailure()
 		return
@@ -67,13 +132,14 @@ func (bt *baseTranslator) InstanceName() string {
 }
 
 func (bt *baseTranslator) OnSuccess() {
+	bt.tasksMetric.WithLabelValues(translationStateSuccess, bt.InstanceName()).Inc()
+	bt.upMetric.WithLabelValues(bt.InstanceName()).Set(1)
+
 	bt.failoverMu.Lock()
 	rst := bt.failures > 0 || bt.currentCooldownMultiplier > 0 || bt.disableCycleCount > 0
 	bt.failoverMu.Unlock()
-
 	if rst {
 		bt.resetFailoverState()
-		bt.upMetric.WithLabelValues(bt.InstanceName()).Set(1)
 	}
 }
 
@@ -88,6 +154,7 @@ func (bt *baseTranslator) resetFailoverState() {
 
 func (bt *baseTranslator) OnFailure() {
 	bt.logger.Warnf("New failure. Current failures: %d/%d", bt.failures, bt.failoverConfig.MaxFailures)
+	bt.tasksMetric.WithLabelValues(translationStateFailed, bt.InstanceName()).Inc()
 	bt.failoverMu.Lock()
 	defer bt.failoverMu.Unlock()
 
@@ -143,11 +210,19 @@ type TranslatorEntry interface {
 }
 
 type TranslatorEntryInstanceOptions struct {
-	Instance        TranslatorInstance
+	Instance TranslatorInstance
+	Weight   int
+	Timeout  int64
+
+	// Failover
 	FailoverConfig  FailoverConfig
-	UpMetric        *prometheus.GaugeVec
-	SelectionMetric *prometheus.CounterVec
-	Weight          int
+	RateLimitConfig RateLimitConfig
+
+	// Metrics
+	UpMetric         *prometheus.GaugeVec
+	SelectionMetric  *prometheus.CounterVec
+	TasksMetric      *prometheus.GaugeVec
+	TokensUsedMetric *prometheus.CounterVec
 }
 
 type weightedTranslatorEntry struct {

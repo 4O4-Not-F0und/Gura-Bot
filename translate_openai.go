@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -18,7 +17,6 @@ type OpenAITranslatorInstance struct {
 	aiClient     openai.Client
 	systemPrompt string
 	model        string
-	timeout      time.Duration
 }
 
 // newOpenAITranslator creates and initializes a new OpenAITranslator.
@@ -49,10 +47,9 @@ func newOpenAITranslator(conf TranslatorInstanceConfig) (c *OpenAITranslatorInst
 	// Already validated, just set it
 	c.name = conf.Name
 	c.systemPrompt = conf.SystemPrompt
-	c.timeout = time.Duration(conf.Timeout) * time.Second
 
-	logrus.Infof("initialized OpenAI translator with model: %s, api url: %s, timeout: %ds",
-		c.model, conf.Endpoint, conf.Timeout)
+	logrus.Debugf("initialized OpenAI translator with model: %s, api url: %s",
+		c.model, conf.Endpoint)
 	return
 }
 
@@ -63,10 +60,7 @@ func (t *OpenAITranslatorInstance) Name() string {
 // Translate sends the given text to the OpenAI API for translation.
 // It respects the configured timeout and rate limiter.
 // Returns the API's chat completion response or an error.
-func (t *OpenAITranslatorInstance) Translate(text string) (resp *TranslateResponse, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
-	defer cancel()
-
+func (t *OpenAITranslatorInstance) Translate(ctx context.Context, text string) (resp *TranslateResponse, err error) {
 	var chatCompletion *openai.ChatCompletion
 	chatCompletion, err = t.aiClient.Chat.Completions.New(
 		ctx,

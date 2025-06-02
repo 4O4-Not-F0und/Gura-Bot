@@ -36,6 +36,7 @@ var (
 )
 
 type BotConfig struct {
+	Debug           bool               `yaml:"debug"`
 	Token           string             `yaml:"token"`
 	MessageSettings BotMessageSettings `yaml:"message_settings"`
 	AllowedChats    []int64            `yaml:"allowed_chats"`
@@ -112,12 +113,7 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 		return
 	}
 	logrus.Infof("authorized on account: %s", botApi.Self.UserName)
-
-	/*
-		if logrus.StandardLogger().Level >= logrus.DebugLevel {
-			botApi.Debug = true
-		}
-	*/
+	botApi.Debug = config.Debug
 
 	bot = &Bot{
 		bot:              botApi,
@@ -151,6 +147,10 @@ func (b *Bot) ReloadConfig(botConfig BotConfig, translateService *TranslateServi
 	b.configMu.Unlock()
 	logrus.Trace("released bot.configMu")
 	return
+}
+
+func (b *Bot) ReServe() {
+	// TODO: Re-serve bot to apply new queue size
 }
 
 // ServeBot starts the bot's main loop for receiving and processing updates.
@@ -217,6 +217,7 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
+	msg.logger.Info("received new translate request")
 	resp, err := b.translateService.Translate(TranslateRequest{
 		Text:     msg.Content,
 		ChatId:   msg.ChatId,

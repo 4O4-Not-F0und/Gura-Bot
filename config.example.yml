@@ -7,6 +7,7 @@ metric:
   listen: 0.0.0.0:9091
 
 bot:
+  debug: false
   # REQUIRED. Your Telegram Bot API token.
   token: ""
   message_settings:
@@ -36,14 +37,6 @@ translate_service:
     langs:
       - JA
       - EN
-
-  rate_limit:
-    # The burst capacity of the rate limiter.
-    # Set bucket_size to 1 to disable burst.
-    bucket_size: 5
-    # The rate at which tokens are refilled to the bucket per second.
-    # e.g.: 0.1 means 6r/min
-    refill_token_per_sec: 0.1
 
   # default settings
   default_translator_config:
@@ -101,4 +94,12 @@ translate_service:
       model: "gemini-2.5-flash-preview"
       # Your API key for the translation service.
       token: ""
+      rate_limit:
+        enabled: true
+        # The burst capacity of the rate limiter.
+        # Set bucket_size to 1 to disable burst.
+        bucket_size: 5
+        # The rate at which tokens are refilled to the bucket per second.
+        # e.g.: 0.1 means 6r/min
+        refill_token_per_sec: 0.1
     
