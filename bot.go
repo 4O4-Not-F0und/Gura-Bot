@@ -221,6 +221,7 @@ func (b *Bot) handleMessage(msg *Message) {
 		Text:    msg.Content,
 		TraceId: msg.TraceId,
 	})
+	msg.logger = msg.logger.WithField("translator_name", resp.TranslatorName)
 	if err != nil {
 		msg.onMessageHandleFailed()
 

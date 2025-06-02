@@ -42,11 +42,22 @@ type TranslateRequest struct {
 }
 
 type TranslateResponse struct {
-	Text       string
-	TokenUsage struct {
+	Text           string
+	TranslatorName string
+	TokenUsage     struct {
 		Completion int64
 		Prompt     int64
 	}
+}
+
+func (resp *TranslateResponse) CloneFrom(tr *TranslateResponse) {
+	if tr == nil {
+		return
+	}
+
+	resp.Text = tr.Text
+	resp.TokenUsage = tr.TokenUsage
+	resp.TranslatorName = tr.TranslatorName
 }
 
 type TranslateError struct {
@@ -228,7 +239,8 @@ func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResp
 			return
 		}
 		retry += 1
-		logger.Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
+		logger.WithField("translator_name", resp.TranslatorName).
+			Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
 		time.Sleep(time.Duration(ts.retryCooldown) * time.Second)
 	}
 }
@@ -240,7 +252,11 @@ func (ts *TranslateService) translate(req TranslateRequest) (resp *TranslateResp
 		return
 	}
 
-	resp, err = translator.Translate(req)
+	resp = &TranslateResponse{}
+	var r *TranslateResponse
+	r, err = translator.Translate(req)
+	resp.CloneFrom(r)
+	resp.TranslatorName = translator.InstanceName()
 	if err != nil {
 		return
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 
@@ -50,8 +49,9 @@ func newMessage(message *tgbotapi.Message) *Message {
 
 func (m *Message) traceId() string {
 	h := md5.New()
-	return hex.EncodeToString(
-		h.Sum([]byte(fmt.Sprintf("%s%d", m.ChatId, m.MessageID))))
+	var b []byte
+	h.Write(fmt.Appendf(b, "%s%d", m.ChatId, m.MessageID))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func (m *Message) onMessageHandleFailed() {
