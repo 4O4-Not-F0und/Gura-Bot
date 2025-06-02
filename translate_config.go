@@ -72,7 +72,7 @@ type RateLimitConfig struct {
 }
 
 type DefaultTranslatorConfig struct {
-	// Postive
+	// Positive
 	Weight int `yaml:"weight"`
 
 	// Optional
@@ -91,7 +91,7 @@ type TranslatorInstanceConfig struct {
 	// Required
 	Type string `yaml:"type"`
 
-	// Postive
+	// Positive
 	Timeout int64 `yaml:"timeout"`
 
 	// Optional
