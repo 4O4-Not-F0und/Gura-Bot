@@ -203,10 +203,20 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 
 		names = append(names, instance.Name())
 		ts.translatorEntry.AddInstance(TranslatorEntryInstanceOptions{
-			Instance:       instance,
-			Weight:         tc.Weight,
-			FailoverConfig: tc.Failover,
+			Instance:        instance,
+			Weight:          tc.Weight,
+			UpMetric:        metricTranslatorUp,
+			SelectionMetric: metricTranslatorSelectionTotal,
+			FailoverConfig:  tc.Failover,
 		})
+
+		for _, state := range allTranslationTaskStates {
+			metricTranslatorTasks.WithLabelValues(state, instance.Name()).Add(0.0)
+		}
+
+		for _, t := range allTranslationTokenUsedTypes {
+			metricTranslatorTokensUsed.WithLabelValues(t, instance.Name()).Add(0.0)
+		}
 	}
 	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalConfigWeight())
 	return
@@ -262,35 +272,34 @@ func (ts *TranslateService) translate(req TranslateRequest, logger *logrus.Entry
 	ctx, cancel := context.WithTimeout(context.Background(), translationLimiterWaitSeconds*time.Second)
 	defer cancel()
 
-	logger = logger.WithField("translator_name", translator.InstanceName())
+	tName := translator.InstanceName()
+	logger = logger.WithField("translator_name", tName)
 
 	logger.Trace("wating for global limiter")
-	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Inc()
+	metricTranslatorTasks.WithLabelValues(translationStatePending, tName).Inc()
 	err = ts.limiter.Wait(ctx)
-	metricTranslationTasks.WithLabelValues(translationStatePending, req.ChatType).Dec()
+	metricTranslatorTasks.WithLabelValues(translationStatePending, tName).Dec()
 	if err != nil {
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
-	metricTranslationTasks.WithLabelValues(translationStateProcessing, req.ChatType).Inc()
-	defer metricTranslationTasks.WithLabelValues(translationStateProcessing, req.ChatType).Dec()
+	metricTranslatorTasks.WithLabelValues(translationStateProcessing, tName).Inc()
+	defer metricTranslatorTasks.WithLabelValues(translationStateProcessing, tName).Dec()
 
 	logger.Trace("wating for translate response")
 	resp, err = translator.Translate(req.Text)
 	if resp != nil {
-		metricTranslationTokensUsed.WithLabelValues(
-			translationTokenUsedTypeCompletion,
-			req.ChatType,
+		metricTranslatorTokensUsed.WithLabelValues(
+			translationTokenUsedTypeCompletion, tName,
 		).Add(float64(resp.TokenUsage.Completion))
-		metricTranslationTokensUsed.WithLabelValues(
-			translationTokenUsedTypePrompt,
-			req.ChatType,
+		metricTranslatorTokensUsed.WithLabelValues(
+			translationTokenUsedTypePrompt, tName,
 		).Add(float64(resp.TokenUsage.Prompt))
 	}
 
 	if err != nil {
-		metricTranslationTasks.WithLabelValues(translationStateFailed, req.ChatType).Inc()
+		metricTranslatorTasks.WithLabelValues(translationStateFailed, tName).Inc()
 		return
 	}
-	metricTranslationTasks.WithLabelValues(translationStateSuccess, req.ChatType).Inc()
+	metricTranslatorTasks.WithLabelValues(translationStateSuccess, tName).Inc()
 	return
 }

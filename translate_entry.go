@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 )
 
@@ -13,14 +14,16 @@ type Translator interface {
 	OnSuccess()
 	OnFailure()
 	IsDisabled() bool
-	ResetFailoverState()
+	// ResetFailoverState()
 	Translate(string) (*TranslateResponse, error)
 	InstanceName() string
 }
 
 type baseTranslator struct {
-	instance TranslatorInstance
-	logger   *logrus.Entry
+	instance        TranslatorInstance
+	logger          *logrus.Entry
+	upMetric        *prometheus.GaugeVec
+	selectionMetric *prometheus.CounterVec
 
 	// Failover
 	failoverConfig            FailoverConfig
@@ -32,19 +35,24 @@ type baseTranslator struct {
 	failoverMu                *sync.Mutex
 }
 
-func newBaseTranslator(instance TranslatorInstance, failover FailoverConfig) (bt *baseTranslator) {
+func newBaseTranslator(opts TranslatorEntryInstanceOptions) (bt *baseTranslator) {
 	bt = &baseTranslator{
-		instance:              instance,
-		failoverConfig:        failover,
+		instance:              opts.Instance,
+		failoverConfig:        opts.FailoverConfig,
+		upMetric:              opts.UpMetric,
+		selectionMetric:       opts.SelectionMetric,
 		failoverMu:            new(sync.Mutex),
 		isPermanentlyDisabled: false,
 	}
-	bt.logger = logrus.WithField("translator_name", instance.Name())
-	bt.ResetFailoverState()
+	bt.upMetric.WithLabelValues(bt.InstanceName()).Set(1)
+	bt.selectionMetric.WithLabelValues(bt.InstanceName()).Add(0.0)
+	bt.logger = logrus.WithField("translator_name", bt.InstanceName())
+	bt.resetFailoverState()
 	return
 }
 
 func (bt *baseTranslator) Translate(s string) (tr *TranslateResponse, err error) {
+	bt.selectionMetric.WithLabelValues(bt.InstanceName()).Inc()
 	tr, err = bt.instance.Translate(s)
 	if err != nil {
 		bt.OnFailure()
@@ -64,16 +72,17 @@ func (bt *baseTranslator) OnSuccess() {
 	bt.failoverMu.Unlock()
 
 	if rst {
-		bt.ResetFailoverState()
+		bt.resetFailoverState()
+		bt.upMetric.WithLabelValues(bt.InstanceName()).Set(1)
 	}
 }
 
-func (bt *baseTranslator) ResetFailoverState() {
+func (bt *baseTranslator) resetFailoverState() {
 	bt.failoverMu.Lock()
 	bt.failures = 0
 	bt.currentCooldownMultiplier = 0
 	bt.disableCycleCount = 0
-	// bt.isPermanentlyDisabled = false
+	bt.isPermanentlyDisabled = false
 	bt.failoverMu.Unlock()
 }
 
@@ -84,6 +93,7 @@ func (bt *baseTranslator) OnFailure() {
 
 	bt.failures += 1
 	if bt.failures >= bt.failoverConfig.MaxFailures {
+		bt.upMetric.WithLabelValues(bt.InstanceName()).Set(0)
 		bt.failures = 0
 		bt.currentCooldownMultiplier += 1
 		bt.disableCycleCount += 1
@@ -118,7 +128,7 @@ type weightedTranslator struct {
 
 func newWeightedTranslator(opts TranslatorEntryInstanceOptions) (wt *weightedTranslator) {
 	wt = &weightedTranslator{
-		baseTranslator: *newBaseTranslator(opts.Instance, opts.FailoverConfig),
+		baseTranslator: *newBaseTranslator(opts),
 		configWeight:   opts.Weight,
 		currentWeight:  0,
 	}
@@ -133,9 +143,11 @@ type TranslatorEntry interface {
 }
 
 type TranslatorEntryInstanceOptions struct {
-	Instance       TranslatorInstance
-	FailoverConfig FailoverConfig
-	Weight         int
+	Instance        TranslatorInstance
+	FailoverConfig  FailoverConfig
+	UpMetric        *prometheus.GaugeVec
+	SelectionMetric *prometheus.CounterVec
+	Weight          int
 }
 
 type weightedTranslatorEntry struct {

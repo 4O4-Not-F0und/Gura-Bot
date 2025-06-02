@@ -84,7 +84,7 @@ func (t *OpenAITranslatorInstance) Translate(text string) (resp *TranslateRespon
 		if errors.As(err, &apiErr) {
 			// Mask sensitive data
 			req := apiErr.Request.Clone(context.Background())
-			req.Header = apiErr.Request.Header
+			req.Header = apiErr.Request.Header.Clone()
 			req.Header.Set("Authorization", "********")
 			err = fmt.Errorf("%w", &TranslateError{
 				e:        err,

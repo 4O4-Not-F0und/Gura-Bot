@@ -260,14 +260,6 @@ func (b *Bot) initMessageMetrics() {
 		for _, state := range allMessageStates {
 			metricMessages.WithLabelValues(state, ct).Set(0)
 		}
-
-		for _, state := range allTranslationTaskStates {
-			metricTranslationTasks.WithLabelValues(state, ct).Set(0)
-		}
-
-		for _, t := range allTranslationTokenUsedTypes {
-			metricTranslationTokensUsed.WithLabelValues(t, ct).Add(0.0)
-		}
 	}
 
 	logrus.Info("all bot metrics initialized")
