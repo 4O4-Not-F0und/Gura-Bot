@@ -57,8 +57,8 @@ func main() {
 		logrus.Fatal(err)
 	}
 
+	go bot.ServeBot()
 	handleSignals(bot)
-	bot.ServeBot()
 }
 
 func reloadLogConfig(level string) (err error) {
@@ -75,38 +75,36 @@ func handleSignals(bot *Bot) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGHUP)
 
-	go func() {
-		for sig := range sigChan {
-			switch sig {
-			case syscall.SIGHUP:
-				logrus.Infof("received %s, attempting to reload config", sig.String())
+	for sig := range sigChan {
+		switch sig {
+		case syscall.SIGHUP:
+			logrus.Infof("received %s, attempting to reload config", sig.String())
 
-				appConfig, err := loadConfig(configFile)
-				if err != nil {
-					logrus.Errorf("error reloading config: %v", err)
-					continue
-				}
-
-				err = reloadLogConfig(appConfig.LogLevel)
-				if err != nil {
-					logrus.Errorf("error parsing new log level '%s': %v", appConfig.LogLevel, err)
-					continue
-				}
-
-				translateService, err := newTranslateService(appConfig.TranslateService)
-				if err != nil {
-					logrus.Error(err)
-					continue
-				}
-
-				err = bot.ReloadConfig(appConfig.Bot, translateService)
-				if err != nil {
-					logrus.Error(err)
-					continue
-				}
-
-				logrus.Info("config reloaded")
+			appConfig, err := loadConfig(configFile)
+			if err != nil {
+				logrus.Errorf("error reloading config: %v", err)
+				continue
 			}
+
+			err = reloadLogConfig(appConfig.LogLevel)
+			if err != nil {
+				logrus.Errorf("error parsing new log level '%s': %v", appConfig.LogLevel, err)
+				continue
+			}
+
+			translateService, err := newTranslateService(appConfig.TranslateService)
+			if err != nil {
+				logrus.Error(err)
+				continue
+			}
+
+			err = bot.Reload(appConfig.Bot, translateService)
+			if err != nil {
+				logrus.Error(err)
+				continue
+			}
+
+			logrus.Info("config reloaded")
 		}
-	}()
+	}
 }

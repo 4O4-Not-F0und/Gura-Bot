@@ -54,10 +54,7 @@ translate_service:
       max_failures: 3
       cooldown_base_sec: 120
       max_disable_cycles: 6
-    type: openai
     weight: 1
-    # Timeout in seconds for API translation requests.
-    timeout: 60
     # REQUIRED: The system prompt to guide the AI model's translation.
     system_prompt: |
       **# Role & Objective**
@@ -88,6 +85,9 @@ translate_service:
 
   translators:
     - name: translator-01
+      type: openai
+      # Timeout in seconds for API translation requests.
+      timeout: 60
       # The base URL of the OpenAI-compatible API.
       endpoint: "https:# generativelanguage.googleapis.com/v1beta/openai"
       # REQUIRED: The model to use for translation

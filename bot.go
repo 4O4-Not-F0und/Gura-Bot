@@ -90,11 +90,13 @@ func (ss *SafeSlice[T]) Clone() (s []T) {
 
 type Bot struct {
 	bot              *tgbotapi.BotAPI
+	updatesChan      tgbotapi.UpdatesChannel
 	translateService *TranslateService
 	messageSettings  BotMessageSettings
 	allowedChats     *SafeSlice[int64]
 	workerPoolSize   int
 	configMu         *sync.RWMutex
+	stopServeNotify  chan int
 }
 
 func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err error) {
@@ -115,15 +117,22 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 	logrus.Infof("authorized on account: %s", botApi.Self.UserName)
 	botApi.Debug = config.Debug
 
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+	updates := botApi.GetUpdatesChan(u)
+
 	bot = &Bot{
 		bot:              botApi,
+		updatesChan:      updates,
 		translateService: translateService,
 		messageSettings:  config.MessageSettings,
 		allowedChats:     newSafeSlice(config.AllowedChats),
 		workerPoolSize:   config.WorkerPoolSize,
 		configMu:         &sync.RWMutex{},
+		stopServeNotify:  make(chan int, 1),
 	}
-	err = bot.ReloadConfig(config, translateService)
+
+	_, err = bot.loadConfig(config, translateService)
 	if err != nil {
 		return
 	}
@@ -132,7 +141,7 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 	return
 }
 
-func (b *Bot) ReloadConfig(botConfig BotConfig, translateService *TranslateService) (err error) {
+func (b *Bot) loadConfig(botConfig BotConfig, translateService *TranslateService) (reServeRequired bool, err error) {
 	logrus.Trace("acquiring bot.configMu")
 	b.configMu.Lock()
 	logrus.Trace("acquired bot.configMu")
@@ -140,28 +149,45 @@ func (b *Bot) ReloadConfig(botConfig BotConfig, translateService *TranslateServi
 	b.allowedChats.New(botConfig.AllowedChats)
 	b.messageSettings = botConfig.MessageSettings
 	b.translateService = translateService
-	if b.workerPoolSize != botConfig.WorkerPoolSize {
-		logrus.Warn("worker pool size changed, please restart bot to apply")
-	}
+	reServeRequired = b.workerPoolSize != botConfig.WorkerPoolSize
+	b.workerPoolSize = botConfig.WorkerPoolSize
 
 	b.configMu.Unlock()
 	logrus.Trace("released bot.configMu")
 	return
 }
 
-func (b *Bot) ReServe() {
-	// TODO: Re-serve bot to apply new queue size
+func (b *Bot) Reload(botConfig BotConfig, translateService *TranslateService) (err error) {
+	var reServeRequired bool
+	reServeRequired, err = b.loadConfig(botConfig, translateService)
+	if err != nil {
+		return
+	}
+
+	if reServeRequired {
+		logrus.Info("re-serve bot required, attempting to restart bot loop")
+		b.stopServeNotify <- 1
+		go b.ServeBot()
+	}
+
+	return
 }
 
 // ServeBot starts the bot's main loop for receiving and processing updates.
 func (b *Bot) ServeBot() {
 	q := make(chan int, b.workerPoolSize)
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := b.bot.GetUpdatesChan(u)
 
-	logrus.Infof("begin update loop, timeout: %ds, queue size: %d", u.Timeout, b.workerPoolSize)
-	for update := range updates {
+	logrus.Infof("begin update loop, queue size: %d", b.workerPoolSize)
+	defer func() {
+		logrus.Info("stopped update loop")
+	}()
+	for update := range b.updatesChan {
+		select {
+		case <-b.stopServeNotify:
+			return
+		default:
+		}
+
 		var msg *Message
 		if update.Message != nil {
 			msg = newMessage(update.Message)
