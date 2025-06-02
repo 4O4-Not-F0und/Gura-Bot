@@ -17,7 +17,7 @@ type Translator interface {
 	OnFailure()
 	IsDisabled() bool
 	// ResetFailoverState()
-	Translate(string) (*TranslateResponse, error)
+	Translate(TranslateRequest) (*TranslateResponse, error)
 	InstanceName() string
 }
 
@@ -74,8 +74,8 @@ func newBaseTranslator(opts TranslatorEntryInstanceOptions) (bt *baseTranslator)
 			rate.Limit(opts.RateLimitConfig.RefillTPS),
 			opts.RateLimitConfig.BucketSize,
 		)
-		bt.logger.Debugf(
-			"global rate limiter refill: %.2f tokens/s, bucket size: %d",
+		bt.logger.Infof(
+			"rate limiter refill: %.2f tokens/s, bucket size: %d",
 			opts.RateLimitConfig.RefillTPS,
 			opts.RateLimitConfig.BucketSize,
 		)
@@ -91,25 +91,28 @@ func (bt *baseTranslator) wait(ctx context.Context) (err error) {
 	return
 }
 
-func (bt *baseTranslator) Translate(s string) (tr *TranslateResponse, err error) {
+func (bt *baseTranslator) Translate(req TranslateRequest) (tr *TranslateResponse, err error) {
 	bt.selectionMetric.WithLabelValues(bt.InstanceName()).Inc()
 
 	ctx, cancel := context.WithTimeout(context.Background(), bt.timeout)
 	defer cancel()
 
-	bt.logger.Trace("wating for limiter")
+	logger := bt.logger.WithField("trace_id", req.TraceId)
+
+	logger.Trace("wating for limiter")
 	bt.tasksMetric.WithLabelValues(translationStatePending, bt.InstanceName()).Inc()
 	err = bt.wait(ctx)
 	bt.tasksMetric.WithLabelValues(translationStatePending, bt.InstanceName()).Dec()
 	if err != nil {
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
+	logger.Trace("acquired limiter")
 
 	bt.tasksMetric.WithLabelValues(translationStateProcessing, bt.InstanceName()).Inc()
 	defer bt.tasksMetric.WithLabelValues(translationStateProcessing, bt.InstanceName()).Dec()
 
-	bt.logger.Trace("wating for translate response")
-	tr, err = bt.instance.Translate(ctx, s)
+	logger.Trace("wating for translate response")
+	tr, err = bt.instance.Translate(ctx, req)
 	if tr != nil {
 		bt.tokensUsedMetric.WithLabelValues(
 			translationTokenUsedTypeCompletion, bt.InstanceName()).Add(
@@ -150,6 +153,7 @@ func (bt *baseTranslator) resetFailoverState() {
 	bt.disableCycleCount = 0
 	bt.isPermanentlyDisabled = false
 	bt.failoverMu.Unlock()
+	bt.logger.Debug("failover state reset")
 }
 
 func (bt *baseTranslator) OnFailure() {

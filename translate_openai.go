@@ -60,7 +60,7 @@ func (t *OpenAITranslatorInstance) Name() string {
 // Translate sends the given text to the OpenAI API for translation.
 // It respects the configured timeout and rate limiter.
 // Returns the API's chat completion response or an error.
-func (t *OpenAITranslatorInstance) Translate(ctx context.Context, text string) (resp *TranslateResponse, err error) {
+func (t *OpenAITranslatorInstance) Translate(ctx context.Context, req TranslateRequest) (resp *TranslateResponse, err error) {
 	var chatCompletion *openai.ChatCompletion
 	chatCompletion, err = t.aiClient.Chat.Completions.New(
 		ctx,
@@ -68,7 +68,7 @@ func (t *OpenAITranslatorInstance) Translate(ctx context.Context, text string) (
 			Model: t.model,
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				openai.SystemMessage(t.systemPrompt),
-				openai.UserMessage(text),
+				openai.UserMessage(req.Text),
 			},
 		},
 	)

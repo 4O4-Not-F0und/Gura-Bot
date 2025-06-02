@@ -217,11 +217,9 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
-	msg.logger.Info("received new translate request")
 	resp, err := b.translateService.Translate(TranslateRequest{
-		Text:     msg.Content,
-		ChatId:   msg.ChatId,
-		ChatType: msg.ChatType,
+		Text:    msg.Content,
+		TraceId: msg.TraceId,
 	})
 	if err != nil {
 		msg.onMessageHandleFailed()

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"fmt"
 	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -13,6 +16,7 @@ type Message struct {
 	Content  string
 	ChatId   string
 	ChatType string
+	TraceId  string
 }
 
 func newMessage(message *tgbotapi.Message) *Message {
@@ -39,8 +43,15 @@ func newMessage(message *tgbotapi.Message) *Message {
 		ChatType: message.Chat.Type,
 		ChatId:   strconv.FormatInt(message.Chat.ID, 10),
 	}
-
+	m.TraceId = m.traceId()
+	m.logger = m.logger.WithField("trace_id", m.TraceId)
 	return m
+}
+
+func (m *Message) traceId() string {
+	h := md5.New()
+	return hex.EncodeToString(
+		h.Sum([]byte(fmt.Sprintf("%s%d", m.ChatId, m.MessageID))))
 }
 
 func (m *Message) onMessageHandleFailed() {

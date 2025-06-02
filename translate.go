@@ -37,9 +37,8 @@ var (
 )
 
 type TranslateRequest struct {
-	Text     string
-	ChatType string
-	ChatId   string
+	Text    string
+	TraceId string
 }
 
 type TranslateResponse struct {
@@ -74,7 +73,7 @@ func (r *TranslateError) Error() string {
 }
 
 type TranslatorInstance interface {
-	Translate(context.Context, string) (*TranslateResponse, error)
+	Translate(context.Context, TranslateRequest) (*TranslateResponse, error)
 	Name() string
 }
 
@@ -216,9 +215,9 @@ func (ts *TranslateService) DetectLang(text string) (lang string, confidence flo
 
 func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResponse, err error) {
 	retry := 0
-	logger := logrus.WithField("chat_id", req.ChatId)
+	logger := logrus.WithField("trace_id", req.TraceId)
 	for {
-		resp, err = ts.translate(req, logger)
+		resp, err = ts.translate(req)
 		if err == nil {
 			return
 		}
@@ -233,14 +232,14 @@ func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResp
 	}
 }
 
-func (ts *TranslateService) translate(req TranslateRequest, logger *logrus.Entry) (resp *TranslateResponse, err error) {
+func (ts *TranslateService) translate(req TranslateRequest) (resp *TranslateResponse, err error) {
 	translator, err := ts.translatorEntry.Translator()
 	if err != nil {
 		err = fmt.Errorf("error on select translator: %w", err)
 		return
 	}
 
-	resp, err = translator.Translate(req.Text)
+	resp, err = translator.Translate(req)
 	if err != nil {
 		return
 	}
