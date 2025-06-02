@@ -186,6 +186,7 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 			TasksMetric:      metricTranslatorTasks,
 			TokensUsedMetric: metricTranslatorTokensUsed,
 			FailoverConfig:   tc.Failover,
+			RateLimitConfig:  tc.RateLimitConfig,
 		})
 	}
 	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalConfigWeight())

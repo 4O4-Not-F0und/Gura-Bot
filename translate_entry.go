@@ -74,7 +74,7 @@ func newBaseTranslator(opts TranslatorEntryInstanceOptions) (bt *baseTranslator)
 			rate.Limit(opts.RateLimitConfig.RefillTPS),
 			opts.RateLimitConfig.BucketSize,
 		)
-		bt.logger.Infof(
+		bt.logger.Debugf(
 			"rate limiter refill: %.2f tokens/s, bucket size: %d",
 			opts.RateLimitConfig.RefillTPS,
 			opts.RateLimitConfig.BucketSize,
