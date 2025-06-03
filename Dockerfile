@@ -1,21 +1,21 @@
 FROM golang:alpine AS builder
 
-WORKDIR /telegram_translate_bot
-COPY . /telegram_translate_bot
+WORKDIR /gura_bot
+COPY . /gura_bot
 
 ENV CGO_ENABLED 0
 ENV GOOS linux
 ENV GOARCH amd64
 
-RUN go mod tidy && go test ./... && go build -trimpath -ldflags="-w -s" -o telegram_translate_bot
+RUN go mod tidy && go test ./... && go build -trimpath -ldflags="-w -s" -o gura_bot
 
 FROM alpine:latest AS runner
 
-WORKDIR /telegram_translate_bot
-COPY --from=builder /telegram_translate_bot/telegram_translate_bot .
-COPY --from=builder /telegram_translate_bot/config.example.yml config.yml
-COPY --from=builder --chmod=0755 /telegram_translate_bot/scripts/reload.sh /usr/sbin/reload.sh
+WORKDIR /gura_bot
+COPY --from=builder /gura_bot/gura_bot .
+COPY --from=builder /gura_bot/config.example.yml config.yml
+COPY --from=builder --chmod=0755 /gura_bot/scripts/reload.sh /usr/sbin/reload.sh
 
 EXPOSE 9091/tcp
 
-ENTRYPOINT ["./telegram_translate_bot"]
+ENTRYPOINT ["./gura_bot"]

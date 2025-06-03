@@ -1,8 +1,8 @@
 
 services:
-  telegram-translate-bot:
-    image: ghcr.io/4O4-Not-F0und/telegram-translate-bot:main
-    container_name: telegram-translate-bot
+  gura-bot:
+    image: ghcr.io/4O4-Not-F0und/gura-bot:main
+    container_name: gura-bot
     volumes:
       - "path/to/config/config.yml:/rss_exporter/config.yml:ro"
     ports:
