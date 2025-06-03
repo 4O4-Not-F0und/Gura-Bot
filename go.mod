@@ -1,4 +1,4 @@
-module github.com/4O4-Not-F0und/Telegram-Translate-Bot
+module github.com/4O4-Not-F0und/Gura-Bot
 
 go 1.24.3
 

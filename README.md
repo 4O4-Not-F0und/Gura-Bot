@@ -1,8 +1,8 @@
-[![Go Report Card](https://goreportcard.com/badge/github.com/4O4-Not-F0und/Telegram-Translate-Bot)](https://goreportcard.com/report/github.com/4O4-Not-F0und/Telegram-Translate-Bot)
+[![Go Report Card](https://goreportcard.com/badge/github.com/4O4-Not-F0und/Gura-Bot)](https://goreportcard.com/report/github.com/4O4-Not-F0und/Gura-Bot)
 
 # Telegram Translate Bot
 
-Telegram-Translate-Bot is a Go-based Telegram bot that automatically detects the language of incoming messages in specified chats and translates them into any configured languages using an OpenAI-compatible API.
+Gura-Bot is a Go-based Telegram bot that automatically detects the language of incoming messages in specified chats and translates them into any configured languages using an OpenAI-compatible API.
 
 ## Features
 
@@ -32,7 +32,7 @@ This application supports dynamic configuration reloading, allowing updates to m
 To reload the configuration, send a `SIGHUP` signal to the running bot process:
 
 ```bash
-killall -s HUP telegram_translate_bot
+killall -s HUP gura_bot
 ```
 Or, if using the provided Docker image:
 ```bash
@@ -69,18 +69,18 @@ The bot exposes Prometheus metrics on the address specified in `metric.listen` (
 
 Metrics include:
 
-* `telegram_translate_bot_messages_total` (Gauge): Current number of messages being processed by the bot.
+* `gura_bot_messages_total` (Gauge): Current number of messages being processed by the bot.
     * Labels: `state`, `chat_type`
     * States: `pending` (waiting for an available worker), `processing` (actively handled), `unauthorized` (disallowed source), `failed` (error during handling), `processed` (successfully handled).
-* `telegram_translate_bot_translator_tasks_total` (Gauge): Total number of translation tasks, by state and translator.
+* `gura_bot_translator_tasks_total` (Gauge): Total number of translation tasks, by state and translator.
     * Labels: `state`, `translator_name`
     * States: `pending` (waiting for rate limiter), `processing` (waiting for API response), `success` (translation successful), `failed` (any step in translation failed).
-* `telegram_translate_bot_translator_tokens_used` (Counter): Used tokens for translation tasks, by token type and translator.
+* `gura_bot_translator_tokens_used` (Counter): Used tokens for translation tasks, by token type and translator.
     * Labels: `token_type`, `translator_name`
     * Token Types: `completion` (output tokens), `prompt` (input tokens)
-* `telegram_translate_bot_translator_up` (Gauge): Indicates if a translator is currently up and operational (1 for up, 0 for disabled due to failover).
+* `gura_bot_translator_up` (Gauge): Indicates if a translator is currently up and operational (1 for up, 0 for disabled due to failover).
     * Labels: `translator_name`
-* `telegram_translate_bot_translator_selection_total` (Counter): Times a specific translator instance was chosen by the load balancing algorithm.
+* `gura_bot_translator_selection_total` (Counter): Times a specific translator instance was chosen by the load balancing algorithm.
     * Labels: `translator_name`
 
 ## Contributing

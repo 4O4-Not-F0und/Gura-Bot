@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	namespace = "telegram_translate_bot"
+	namespace = "gura_bot"
 )
 
 type MetricConfig struct {
