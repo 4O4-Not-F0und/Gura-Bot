@@ -1,6 +1,6 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/4O4-Not-F0und/Gura-Bot)](https://goreportcard.com/report/github.com/4O4-Not-F0und/Gura-Bot)
 
-# Telegram Translate Bot
+# Gura Bot
 
 Gura-Bot is a Go-based Telegram bot that automatically detects the language of incoming messages in specified chats and translates them into any configured languages using an OpenAI-compatible API.
 
