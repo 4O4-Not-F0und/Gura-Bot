@@ -1,4 +1,4 @@
-package main
+package translate
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
 )
@@ -100,7 +101,7 @@ type TranslateService struct {
 	translatorEntry         TranslatorEntry
 }
 
-func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
+func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
 	ts = &TranslateService{
 		maxmiumRetry:    conf.MaxmiumRetry,
 		translatorEntry: newWeightedTranslatorEntry(),
@@ -156,7 +157,7 @@ func newTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 	return
 }
 
-func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorInstanceConfig) (err error) {
+func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorConfig) (err error) {
 	if len(translatorConfs) == 0 {
 		err = fmt.Errorf("no translator configured")
 		return
@@ -173,7 +174,7 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 		var instance TranslatorInstance
 		switch tc.Type {
 		case translatorInstanceTypeOpenAI:
-			instance, err = newOpenAITranslator(tc)
+			instance, err = newTranslatorOpenAI(tc)
 		default:
 			err = fmt.Errorf("unknown translator type: %s", tc.Type)
 		}
@@ -192,10 +193,10 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorIn
 			Instance:         instance,
 			Timeout:          tc.Timeout,
 			Weight:           tc.Weight,
-			UpMetric:         metricTranslatorUp,
-			SelectionMetric:  metricTranslatorSelectionTotal,
-			TasksMetric:      metricTranslatorTasks,
-			TokensUsedMetric: metricTranslatorTokensUsed,
+			UpMetric:         metrics.MetricTranslatorUp,
+			SelectionMetric:  metrics.MetricTranslatorSelectionTotal,
+			TasksMetric:      metrics.MetricTranslatorTasks,
+			TokensUsedMetric: metrics.MetricTranslatorTokensUsed,
 			FailoverConfig:   tc.Failover,
 			RateLimitConfig:  tc.RateLimitConfig,
 		})

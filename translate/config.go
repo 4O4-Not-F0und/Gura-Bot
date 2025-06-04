@@ -1,4 +1,4 @@
-package main
+package translate
 
 import (
 	"fmt"
@@ -12,12 +12,12 @@ const (
 
 // TranslateConfig holds all configuration related to translation services.
 type TranslateServiceConfig struct {
-	MaxmiumRetry            int                        `yaml:"max_retry"`
-	RetryCooldown           int                        `yaml:"retry_cooldown"`
-	DetectLangs             []string                   `yaml:"detect_langs"`
-	SourceLang              SourceLanguageConfig       `yaml:"source_lang"`
-	Translators             []TranslatorInstanceConfig `yaml:"translators"`
-	DefaultTranslatorConfig DefaultTranslatorConfig    `yaml:"default_translator_config"`
+	MaxmiumRetry            int                     `yaml:"max_retry"`
+	RetryCooldown           int                     `yaml:"retry_cooldown"`
+	DetectLangs             []string                `yaml:"detect_langs"`
+	SourceLang              SourceLanguageConfig    `yaml:"source_lang"`
+	Translators             []TranslatorConfig      `yaml:"translators"`
+	DefaultTranslatorConfig DefaultTranslatorConfig `yaml:"default_translator_config"`
 }
 
 // SourceLanguageConfig defines parameters for validating detected source languages.
@@ -26,15 +26,15 @@ type SourceLanguageConfig struct {
 	Langs               []string `yaml:"langs"`
 }
 
-// newTranslateConfig creates a new TranslateConfig with default empty slices and zero values.
-func newTranslateServiceConfig() (c TranslateServiceConfig) {
+// NewTranslateServiceConfig creates a new TranslateConfig with default empty slices and zero values.
+func NewTranslateServiceConfig() (c TranslateServiceConfig) {
 	c = TranslateServiceConfig{
 		DetectLangs: make([]string, 0),
 		SourceLang: SourceLanguageConfig{
 			ConfidenceThreshold: 0,
 			Langs:               make([]string, 0),
 		},
-		Translators: make([]TranslatorInstanceConfig, 0),
+		Translators: make([]TranslatorConfig, 0),
 	}
 
 	// By default config, will disable translators consistely fail for:
@@ -82,7 +82,7 @@ type DefaultTranslatorConfig struct {
 	Failover FailoverConfig `yaml:"failover"`
 }
 
-type TranslatorInstanceConfig struct {
+type TranslatorConfig struct {
 	DefaultTranslatorConfig `yaml:",inline"`
 
 	// Required
@@ -107,7 +107,7 @@ type TranslatorInstanceConfig struct {
 	RateLimitConfig `yaml:"rate_limit"`
 }
 
-func (tic *TranslatorInstanceConfig) CheckAndMergeDefaultConfig(dtc DefaultTranslatorConfig) (err error) {
+func (tic *TranslatorConfig) CheckAndMergeDefaultConfig(dtc DefaultTranslatorConfig) (err error) {
 	if tic.Name == "" {
 		err = fmt.Errorf("translator name is required")
 		return

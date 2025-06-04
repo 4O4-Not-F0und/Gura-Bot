@@ -1,4 +1,4 @@
-package main
+package metrics
 
 import (
 	"net/http"
@@ -22,7 +22,7 @@ var (
 	//         "unauthorized" (terminal state for disallowed messages),
 	//         "failed" (terminal state for error occurred while handling messages),
 	//         "processed" (terminal state for successfully handled messages).
-	metricMessages = promauto.NewGaugeVec(
+	MetricMessages = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "messages_total",
@@ -35,7 +35,7 @@ var (
 	//         "processing" (waiting for translation API response),
 	//         "success" (translation and parsing successful),
 	//         "failed" (any step in translation failed).
-	metricTranslatorTasks = promauto.NewGaugeVec(
+	MetricTranslatorTasks = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "translator_tasks_total",
@@ -46,7 +46,7 @@ var (
 
 	// Types: "completion" (output tokens)
 	// 		  "prompt" (input tokens)
-	metricTranslatorTokensUsed = promauto.NewCounterVec(
+	MetricTranslatorTokensUsed = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "translator_tokens_used",
@@ -57,7 +57,7 @@ var (
 
 	// Gauge for translator up status
 	// Value is 1 if the translator is up, 0 if it is disabled.
-	metricTranslatorUp = promauto.NewGaugeVec(
+	MetricTranslatorUp = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "translator_up",
@@ -67,7 +67,7 @@ var (
 	)
 
 	// Gauge for translator selected times
-	metricTranslatorSelectionTotal = promauto.NewCounterVec(
+	MetricTranslatorSelectionTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "translator_selection_total",
@@ -77,7 +77,7 @@ var (
 	)
 )
 
-func initMetricServer(conf MetricConfig) {
+func InitMetricServer(conf MetricConfig) {
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
 		logrus.Infof("Metrics server listening on %s", conf.Listen)

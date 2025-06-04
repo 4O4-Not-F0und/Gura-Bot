@@ -4,20 +4,22 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Bot              BotConfig              `yaml:"bot"`
-	LogLevel         string                 `yaml:"log_level"`
-	TranslateService TranslateServiceConfig `yaml:"translate_service"`
-	Metric           MetricConfig           `yaml:"metric"`
+	Bot              BotConfig                        `yaml:"bot"`
+	LogLevel         string                           `yaml:"log_level"`
+	TranslateService translate.TranslateServiceConfig `yaml:"translate_service"`
+	Metric           metrics.MetricConfig             `yaml:"metric"`
 }
 
 func newConfig() *Config {
 	return &Config{
 		Bot:              newBotConfig(),
-		TranslateService: newTranslateServiceConfig(),
+		TranslateService: translate.NewTranslateServiceConfig(),
 	}
 }
 

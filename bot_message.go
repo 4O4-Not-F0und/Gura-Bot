@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 )
@@ -55,30 +56,30 @@ func (m *Message) traceId() string {
 }
 
 func (m *Message) onMessageHandleFailed() {
-	metricMessages.WithLabelValues(messageHandleStateFailed, m.ChatType).Inc()
+	metrics.MetricMessages.WithLabelValues(messageHandleStateFailed, m.ChatType).Inc()
 	m.onProcessed()
 }
 
 func (m *Message) onUnauthorized() {
-	metricMessages.WithLabelValues(messageHandleStateUnauthorized, m.ChatType).Inc()
+	metrics.MetricMessages.WithLabelValues(messageHandleStateUnauthorized, m.ChatType).Inc()
 	m.onProcessed()
 	m.logger.Infoln("disallowed message source")
 }
 
 func (m *Message) onPending() {
-	metricMessages.WithLabelValues(messageHandleStatePending, m.ChatType).Inc()
+	metrics.MetricMessages.WithLabelValues(messageHandleStatePending, m.ChatType).Inc()
 }
 
 func (m *Message) onProcessing() {
-	metricMessages.WithLabelValues(messageHandleStatePending, m.ChatType).Dec()
-	metricMessages.WithLabelValues(messageHandleStateProcessing, m.ChatType).Inc()
+	metrics.MetricMessages.WithLabelValues(messageHandleStatePending, m.ChatType).Dec()
+	metrics.MetricMessages.WithLabelValues(messageHandleStateProcessing, m.ChatType).Inc()
 }
 
 func (m *Message) onSuccess() {
-	metricMessages.WithLabelValues(messageHandleStateProcessed, m.ChatType).Inc()
+	metrics.MetricMessages.WithLabelValues(messageHandleStateProcessed, m.ChatType).Inc()
 	m.onProcessed()
 }
 
 func (m *Message) onProcessed() {
-	metricMessages.WithLabelValues(messageHandleStateProcessing, m.ChatType).Dec()
+	metrics.MetricMessages.WithLabelValues(messageHandleStateProcessing, m.ChatType).Dec()
 }
