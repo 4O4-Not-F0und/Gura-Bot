@@ -10,20 +10,20 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// TranslatorOpenAI implements the translation logic using the OpenAI style API.
+// TranslatorInstanceOpenAI implements the translation logic using the OpenAI style API.
 // It embeds baseTranslator for common functionalities.
-type TranslatorOpenAI struct {
+type TranslatorInstanceOpenAI struct {
 	name         string
 	aiClient     openai.Client
 	systemPrompt string
 	model        string
 }
 
-// newTranslatorOpenAI creates and initializes a new TranslatorOpenAI.
+// newTranslatorInstanceOpenAI creates and initializes a new TranslatorInstanceOpenAI.
 // It validates the provided TranslateConfig and configures the OpenAI client,
 // language detector, rate limiter, and other parameters.
 // Returns an error if any critical configuration is missing or invalid.
-func newTranslatorOpenAI(conf TranslatorConfig) (c *TranslatorOpenAI, err error) {
+func newTranslatorInstanceOpenAI(conf TranslatorConfig) (c *TranslatorInstanceOpenAI, err error) {
 	openaiOpts := []option.RequestOption{}
 
 	if conf.Token == "" {
@@ -40,7 +40,7 @@ func newTranslatorOpenAI(conf TranslatorConfig) (c *TranslatorOpenAI, err error)
 		return
 	}
 
-	c = new(TranslatorOpenAI)
+	c = new(TranslatorInstanceOpenAI)
 	c.aiClient = openai.NewClient(openaiOpts...)
 	c.model = conf.Model
 
@@ -53,14 +53,14 @@ func newTranslatorOpenAI(conf TranslatorConfig) (c *TranslatorOpenAI, err error)
 	return
 }
 
-func (t *TranslatorOpenAI) Name() string {
+func (t *TranslatorInstanceOpenAI) Name() string {
 	return t.name
 }
 
 // Translate sends the given text to the OpenAI API for translation.
 // It respects the configured timeout and rate limiter.
 // Returns the API's chat completion response or an error.
-func (t *TranslatorOpenAI) Translate(ctx context.Context, req TranslateRequest) (resp *TranslateResponse, err error) {
+func (t *TranslatorInstanceOpenAI) Translate(ctx context.Context, req TranslateRequest) (resp *TranslateResponse, err error) {
 	var chatCompletion *openai.ChatCompletion
 	chatCompletion, err = t.aiClient.Chat.Completions.New(
 		ctx,

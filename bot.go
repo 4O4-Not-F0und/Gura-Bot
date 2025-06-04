@@ -146,6 +146,7 @@ func newBot(config BotConfig, translateService *translate.TranslateService) (bot
 func (b *Bot) loadConfig(botConfig BotConfig, translateService *translate.TranslateService) (reServeRequired bool, err error) {
 	logrus.Trace("acquiring bot.configMu")
 	b.configMu.Lock()
+	defer b.configMu.Unlock()
 	logrus.Trace("acquired bot.configMu")
 
 	b.allowedChats.New(botConfig.AllowedChats)
@@ -154,7 +155,6 @@ func (b *Bot) loadConfig(botConfig BotConfig, translateService *translate.Transl
 	reServeRequired = b.workerPoolSize != botConfig.WorkerPoolSize
 	b.workerPoolSize = botConfig.WorkerPoolSize
 
-	b.configMu.Unlock()
 	logrus.Trace("released bot.configMu")
 	return
 }

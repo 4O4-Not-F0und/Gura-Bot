@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
+	"github.com/4O4-Not-F0und/Gura-Bot/selector"
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
 )
@@ -98,13 +99,13 @@ type TranslateService struct {
 	detectorBuilder         lingua.LanguageDetectorBuilder
 	defaultTranslatorConfig DefaultTranslatorConfig
 	detector                lingua.LanguageDetector
-	translatorEntry         TranslatorEntry
+	translatorSelector      selector.Selector[Translator]
 }
 
 func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
 	ts = &TranslateService{
-		maxmiumRetry:    conf.MaxmiumRetry,
-		translatorEntry: newWeightedTranslatorEntry(),
+		maxmiumRetry:       conf.MaxmiumRetry,
+		translatorSelector: selector.NewWeightedRoundRobinSelector[Translator](),
 	}
 
 	if conf.RetryCooldown <= 0 {
@@ -174,7 +175,7 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorCo
 		var instance TranslatorInstance
 		switch tc.Type {
 		case translatorInstanceTypeOpenAI:
-			instance, err = newTranslatorOpenAI(tc)
+			instance, err = newTranslatorInstanceOpenAI(tc)
 		default:
 			err = fmt.Errorf("unknown translator type: %s", tc.Type)
 		}
@@ -189,19 +190,22 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorCo
 		}
 
 		names = append(names, instance.Name())
-		ts.translatorEntry.AddInstance(TranslatorEntryInstanceOptions{
-			Instance:         instance,
-			Timeout:          tc.Timeout,
-			Weight:           tc.Weight,
-			UpMetric:         metrics.MetricTranslatorUp,
-			SelectionMetric:  metrics.MetricTranslatorSelectionTotal,
-			TasksMetric:      metrics.MetricTranslatorTasks,
-			TokensUsedMetric: metrics.MetricTranslatorTokensUsed,
-			FailoverConfig:   tc.Failover,
-			RateLimitConfig:  tc.RateLimitConfig,
-		})
+		wtOpts := weightTranslatorOptions{
+			TranslatorOptions: TranslatorOptions{
+				Instance:         instance,
+				Timeout:          tc.Timeout,
+				UpMetric:         metrics.MetricTranslatorUp,
+				SelectionMetric:  metrics.MetricTranslatorSelectionTotal,
+				TasksMetric:      metrics.MetricTranslatorTasks,
+				TokensUsedMetric: metrics.MetricTranslatorTokensUsed,
+				FailoverConfig:   tc.Failover,
+				RateLimitConfig:  tc.RateLimitConfig,
+			},
+			Weight: tc.Weight,
+		}
+		ts.translatorSelector.AddItem(newWeightedTranslator(wtOpts))
 	}
-	logrus.Debugf("total weight of WRR entry: %d", ts.translatorEntry.TotalConfigWeight())
+	logrus.Debugf("total weight of WRR entry: %d", ts.translatorSelector.TotalConfigWeight())
 	return
 }
 
@@ -247,7 +251,7 @@ func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResp
 }
 
 func (ts *TranslateService) translate(req TranslateRequest) (resp *TranslateResponse, err error) {
-	translator, err := ts.translatorEntry.Translator()
+	translator, err := ts.translatorSelector.Select()
 	if err != nil {
 		err = fmt.Errorf("error on select translator: %w", err)
 		return
@@ -257,7 +261,7 @@ func (ts *TranslateService) translate(req TranslateRequest) (resp *TranslateResp
 	var r *TranslateResponse
 	r, err = translator.Translate(req)
 	resp.CloneFrom(r)
-	resp.TranslatorName = translator.InstanceName()
+	resp.TranslatorName = translator.GetName()
 	if err != nil {
 		return
 	}
