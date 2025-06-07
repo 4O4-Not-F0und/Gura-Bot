@@ -24,19 +24,26 @@ translate_service:
   max_retry: 3
   retry_cooldown: 30
 
-  # A list of ISO 639-1 language codes that the lingua-go library should be configured to detect.
-  detect_langs:
-    - ZH
-    - JA
-    - EN
-  source_lang:
-    # Minimum confidence score "(0.0, 1.0]" required for a detected language to be considered valid.
-    confidence_threshold: 0.9
-    # A list of ISO 639-1 language codes that the bot will attempt to translate.
-    # If a detected language is not in this list, it won't be translated.
-    langs:
-      - JA
-      - EN
+  # Configuration for language detectors
+  # Can be "fallback" or "wrr" (Weighted Round Robin)
+  language_detector_selector: fallback
+  language_detectors:
+    - name: "lingua_default"
+      # Specifies the type of detector
+      type: "lingua"
+      # Used if language_detector_selector is "wrr"
+      weight: 1
+      # Configuration specific to the 'lingua' type
+      lingua:
+        # A list of ISO 639-1 language codes that this lingua-go instance should be configured to detect.
+        detect_langs:
+          - ZH
+          - JA
+          - EN
+        # Minimum confidence score (0.0, 1.0] required for a detected language to be considered valid by this detector.
+        source_lang_confidence_threshold: 0.9
+        # A list of ISO 639-1 language codes that this detector will report as valid.
+        source_lang_filter: ["JA", "EN"]
 
   # default settings
   default_translator_config:
