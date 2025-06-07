@@ -6,16 +6,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	translatorInstanceTypeOpenAI = "openai"
-)
-
 // TranslateConfig holds all configuration related to translation services.
 type TranslateServiceConfig struct {
 	MaxmiumRetry            int                     `yaml:"max_retry"`
 	RetryCooldown           int                     `yaml:"retry_cooldown"`
 	DetectLangs             []string                `yaml:"detect_langs"`
 	SourceLang              SourceLanguageConfig    `yaml:"source_lang"`
+	TranslatorSelector      string                  `yaml:"translator_selector"`
 	Translators             []TranslatorConfig      `yaml:"translators"`
 	DefaultTranslatorConfig DefaultTranslatorConfig `yaml:"default_translator_config"`
 }

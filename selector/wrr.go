@@ -8,24 +8,15 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Selector[T any] interface {
-	AddItem(T)
-	Select() (T, error)
-	TotalConfigWeight() int
-}
-
 // WeightedItem defines the interface that items managed by the generic WRR selector must implement.
 type WeightedItem interface {
+	Item
 	// GetConfigWeight returns the configured weight of the item.
 	GetConfigWeight() int
 	// GetCurrentWeight returns the current weight of the item (used by the WRR algorithm).
 	GetCurrentWeight() int
 	// SetCurrentWeight sets the current weight of the item.
 	SetCurrentWeight(int)
-	// IsDisabled checks if the item is currently disabled.
-	IsDisabled() bool
-	// GetName returns the name of the item (for logging/debugging).
-	GetName() string
 }
 
 // WeightedRoundRobinSelector is a generic implementation of the Smooth Weighted Round Robin algorithm.

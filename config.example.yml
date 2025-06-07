@@ -70,6 +70,7 @@ translate_service:
 
       Now, please strictly follow the requirements above to translate the content provided by the user, without any deviation.
 
+  translator_selector: fallback
   translators:
     - name: translator-01
       type: openai

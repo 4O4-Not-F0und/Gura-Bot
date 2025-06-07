@@ -22,6 +22,11 @@ const (
 
 	translationTokenUsedTypeCompletion = "completion"
 	translationTokenUsedTypePrompt     = "prompt"
+
+	translatorInstanceTypeOpenAI = "openai"
+
+	translatorSelectorWRR      = "wrr"
+	translatorSelectorFallback = "fallback"
 )
 
 var (
@@ -104,8 +109,17 @@ type TranslateService struct {
 
 func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
 	ts = &TranslateService{
-		maxmiumRetry:       conf.MaxmiumRetry,
-		translatorSelector: selector.NewWeightedRoundRobinSelector[Translator](),
+		maxmiumRetry: conf.MaxmiumRetry,
+	}
+
+	switch conf.TranslatorSelector {
+	case translatorSelectorWRR:
+		ts.translatorSelector = selector.NewWeightedRoundRobinSelector[Translator]()
+	case translatorSelectorFallback:
+		ts.translatorSelector = selector.NewFallbackSelector[Translator]()
+	default:
+		err = fmt.Errorf("unrecognized translator selector: %s", conf.TranslatorSelector)
+		return
 	}
 
 	if conf.RetryCooldown <= 0 {
