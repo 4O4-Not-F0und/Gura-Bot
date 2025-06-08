@@ -1,5 +1,10 @@
 package selector
 
+const (
+	WRR      = "wrr"
+	FALLBACK = "fallback"
+)
+
 type Item interface {
 	// IsDisabled checks if the item is currently disabled.
 	IsDisabled() bool

@@ -24,9 +24,6 @@ const (
 	translationTokenUsedTypePrompt     = "prompt"
 
 	translatorInstanceTypeOpenAI = "openai"
-
-	translatorSelectorWRR      = "wrr"
-	translatorSelectorFallback = "fallback"
 )
 
 var (
@@ -113,9 +110,9 @@ func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 	}
 
 	switch conf.TranslatorSelector {
-	case translatorSelectorWRR:
+	case selector.WRR:
 		ts.translatorSelector = selector.NewWeightedRoundRobinSelector[Translator]()
-	case translatorSelectorFallback:
+	case selector.FALLBACK:
 		ts.translatorSelector = selector.NewFallbackSelector[Translator]()
 	default:
 		err = fmt.Errorf("unrecognized translator selector: %s", conf.TranslatorSelector)
