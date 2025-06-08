@@ -1,10 +1,5 @@
 package selector
 
-const (
-	WRR      = "wrr"
-	FALLBACK = "fallback"
-)
-
 type Item interface {
 	// IsDisabled checks if the item is currently disabled.
 	IsDisabled() bool
@@ -16,4 +11,6 @@ type Selector[T Item] interface {
 	AddItem(T)
 	Select() (T, error)
 	TotalConfigWeight() int
+	// GetType returns the type of this selector
+	GetType() string
 }

@@ -1,96 +1,15 @@
 package translate
 
 import (
-	"context"
 	"fmt"
-	"net/http"
-	"net/http/httputil"
 	"slices"
 	"time"
 
-	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	"github.com/4O4-Not-F0und/Gura-Bot/selector"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/translator"
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
 )
-
-const (
-	translationStatePending    = "pending"
-	translationStateProcessing = "processing"
-	translationStateSuccess    = "success"
-	translationStateFailed     = "failed"
-
-	translationTokenUsedTypeCompletion = "completion"
-	translationTokenUsedTypePrompt     = "prompt"
-
-	translatorInstanceTypeOpenAI = "openai"
-)
-
-var (
-	allTranslationTaskStates = []string{
-		translationStatePending,
-		translationStateProcessing,
-		translationStateSuccess,
-		translationStateFailed,
-	}
-
-	allTranslationTokenUsedTypes = []string{
-		translationTokenUsedTypeCompletion,
-		translationTokenUsedTypePrompt,
-	}
-)
-
-type TranslateRequest struct {
-	Text    string
-	TraceId string
-}
-
-type TranslateResponse struct {
-	Text           string
-	TranslatorName string
-	TokenUsage     struct {
-		Completion int64
-		Prompt     int64
-	}
-}
-
-func (resp *TranslateResponse) CloneFrom(tr *TranslateResponse) {
-	if tr == nil {
-		return
-	}
-
-	resp.Text = tr.Text
-	resp.TokenUsage = tr.TokenUsage
-	resp.TranslatorName = tr.TranslatorName
-}
-
-type TranslateError struct {
-	e        error
-	Request  *http.Request
-	Response *http.Response
-}
-
-func (r *TranslateError) DumpRequest(body bool) []byte {
-	if r.Request.GetBody != nil {
-		r.Request.Body, _ = r.Request.GetBody()
-	}
-	out, _ := httputil.DumpRequestOut(r.Request, body)
-	return out
-}
-
-func (r *TranslateError) DumpResponse(body bool) []byte {
-	out, _ := httputil.DumpResponse(r.Response, body)
-	return out
-}
-
-func (r *TranslateError) Error() string {
-	return r.e.Error()
-}
-
-type TranslatorInstance interface {
-	Translate(context.Context, TranslateRequest) (*TranslateResponse, error)
-	Name() string
-}
 
 // TranslateService provides common functionality for translators, primarily language detection.
 type TranslateService struct {
@@ -99,9 +18,9 @@ type TranslateService struct {
 	retryCooldown           int
 	sourceLangConf          SourceLanguageConfig
 	detectorBuilder         lingua.LanguageDetectorBuilder
-	defaultTranslatorConfig DefaultTranslatorConfig
+	defaultTranslatorConfig translator.DefaultTranslatorConfig
 	detector                lingua.LanguageDetector
-	translatorSelector      selector.Selector[Translator]
+	translatorSelector      selector.Selector[translator.Translator]
 }
 
 func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err error) {
@@ -111,9 +30,9 @@ func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 
 	switch conf.TranslatorSelector {
 	case selector.WRR:
-		ts.translatorSelector = selector.NewWeightedRoundRobinSelector[Translator]()
+		ts.translatorSelector = selector.NewWeightedRoundRobinSelector[translator.Translator]()
 	case selector.FALLBACK:
-		ts.translatorSelector = selector.NewFallbackSelector[Translator]()
+		ts.translatorSelector = selector.NewFallbackSelector[translator.Translator]()
 	default:
 		err = fmt.Errorf("unrecognized translator selector: %s", conf.TranslatorSelector)
 		return
@@ -169,7 +88,7 @@ func NewTranslateService(conf TranslateServiceConfig) (ts *TranslateService, err
 	return
 }
 
-func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorConfig) (err error) {
+func (ts *TranslateService) initTranslatorEntries(translatorConfs []translator.TranslatorConfig) (err error) {
 	if len(translatorConfs) == 0 {
 		err = fmt.Errorf("no translator configured")
 		return
@@ -183,38 +102,19 @@ func (ts *TranslateService) initTranslatorEntries(translatorConfs []TranslatorCo
 			return
 		}
 
-		var instance TranslatorInstance
-		switch tc.Type {
-		case translatorInstanceTypeOpenAI:
-			instance, err = newTranslatorInstanceOpenAI(tc)
-		default:
-			err = fmt.Errorf("unknown translator type: %s", tc.Type)
-		}
-
+		var t translator.Translator
+		t, err = translator.NewTranslator(ts.translatorSelector.GetType(), tc)
 		if err != nil {
 			return
 		}
 
-		if slices.Contains(names, instance.Name()) {
-			err = fmt.Errorf("duplicated translator name: %s", instance.Name())
+		if slices.Contains(names, t.GetName()) {
+			err = fmt.Errorf("duplicated translator name: %s", t.GetName())
 			return
 		}
 
-		names = append(names, instance.Name())
-		wtOpts := weightTranslatorOptions{
-			TranslatorOptions: TranslatorOptions{
-				Instance:         instance,
-				Timeout:          tc.Timeout,
-				UpMetric:         metrics.MetricTranslatorUp,
-				SelectionMetric:  metrics.MetricTranslatorSelectionTotal,
-				TasksMetric:      metrics.MetricTranslatorTasks,
-				TokensUsedMetric: metrics.MetricTranslatorTokensUsed,
-				FailoverConfig:   tc.Failover,
-				RateLimitConfig:  tc.RateLimitConfig,
-			},
-			Weight: tc.Weight,
-		}
-		ts.translatorSelector.AddItem(newWeightedTranslator(wtOpts))
+		names = append(names, t.GetName())
+		ts.translatorSelector.AddItem(t)
 	}
 	logrus.Debugf("total weight of WRR entry: %d", ts.translatorSelector.TotalConfigWeight())
 	return
@@ -241,11 +141,11 @@ func (ts *TranslateService) DetectLang(text string) (lang string, confidence flo
 	return
 }
 
-func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResponse, err error) {
+func (ts *TranslateService) Translate(req translator.TranslateRequest) (resp *translator.TranslateResponse, name string, err error) {
 	retry := 0
 	logger := logrus.WithField("trace_id", req.TraceId)
 	for {
-		resp, err = ts.translate(req)
+		resp, name, err = ts.translate(req)
 		if err == nil {
 			return
 		}
@@ -255,24 +155,25 @@ func (ts *TranslateService) Translate(req TranslateRequest) (resp *TranslateResp
 			return
 		}
 		retry += 1
-		logger.WithField("translator_name", resp.TranslatorName).
-			Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
+		if name != "" {
+			logger.WithField("translator_name", name).
+				Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
+		} else {
+			logger.Warnf("%v. Retry attempt %d/%d in %d seconds", err, retry, ts.maxmiumRetry, ts.retryCooldown)
+		}
 		time.Sleep(time.Duration(ts.retryCooldown) * time.Second)
 	}
 }
 
-func (ts *TranslateService) translate(req TranslateRequest) (resp *TranslateResponse, err error) {
-	translator, err := ts.translatorSelector.Select()
+func (ts *TranslateService) translate(req translator.TranslateRequest) (resp *translator.TranslateResponse, name string, err error) {
+	t, err := ts.translatorSelector.Select()
 	if err != nil {
 		err = fmt.Errorf("error on select translator: %w", err)
 		return
 	}
+	name = t.GetName()
 
-	resp = &TranslateResponse{}
-	var r *TranslateResponse
-	r, err = translator.Translate(req)
-	resp.CloneFrom(r)
-	resp.TranslatorName = translator.GetName()
+	resp, err = t.Translate(req)
 	if err != nil {
 		return
 	}

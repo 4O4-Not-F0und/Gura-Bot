@@ -1,20 +1,16 @@
 package translate
 
-import (
-	"fmt"
-
-	"github.com/sirupsen/logrus"
-)
+import "github.com/4O4-Not-F0und/Gura-Bot/translate/translator"
 
 // TranslateConfig holds all configuration related to translation services.
 type TranslateServiceConfig struct {
-	MaxmiumRetry            int                     `yaml:"max_retry"`
-	RetryCooldown           int                     `yaml:"retry_cooldown"`
-	DetectLangs             []string                `yaml:"detect_langs"`
-	SourceLang              SourceLanguageConfig    `yaml:"source_lang"`
-	TranslatorSelector      string                  `yaml:"translator_selector"`
-	Translators             []TranslatorConfig      `yaml:"translators"`
-	DefaultTranslatorConfig DefaultTranslatorConfig `yaml:"default_translator_config"`
+	MaxmiumRetry            int                                `yaml:"max_retry"`
+	RetryCooldown           int                                `yaml:"retry_cooldown"`
+	DetectLangs             []string                           `yaml:"detect_langs"`
+	SourceLang              SourceLanguageConfig               `yaml:"source_lang"`
+	TranslatorSelector      string                             `yaml:"translator_selector"`
+	Translators             []translator.TranslatorConfig      `yaml:"translators"`
+	DefaultTranslatorConfig translator.DefaultTranslatorConfig `yaml:"default_translator_config"`
 }
 
 // SourceLanguageConfig defines parameters for validating detected source languages.
@@ -31,7 +27,7 @@ func NewTranslateServiceConfig() (c TranslateServiceConfig) {
 			ConfidenceThreshold: 0,
 			Langs:               make([]string, 0),
 		},
-		Translators: make([]TranslatorConfig, 0),
+		Translators: make([]translator.TranslatorConfig, 0),
 	}
 
 	// By default config, will disable translators consistely fail for:
@@ -47,129 +43,5 @@ func NewTranslateServiceConfig() (c TranslateServiceConfig) {
 	c.DefaultTranslatorConfig.Failover.CooldownBaseSec = 120
 	c.DefaultTranslatorConfig.Failover.MaxDisableCycles = 6
 
-	return
-}
-
-type FailoverConfig struct {
-	// Disable translator temporality for CooldownBaseSec * failureCount
-	// if reached MaxFailures, set MaxFailures to 1
-	// to disable a failed translator immediately
-	MaxFailures     int `yaml:"max_failures"`
-	CooldownBaseSec int `yaml:"cooldown_base_sec"`
-
-	// Disable translator permanently if failure counts reached MaxDisableCycles
-	MaxDisableCycles int `yaml:"max_disable_cycles"`
-}
-
-// RateLimitConfig defines the parameters for the rate limiter.
-type RateLimitConfig struct {
-	Enabled    bool    `yaml:"enabled"`
-	BucketSize int     `yaml:"bucket_size"`
-	RefillTPS  float64 `yaml:"refill_token_per_sec"`
-}
-
-type DefaultTranslatorConfig struct {
-	// Positive
-	Weight int `yaml:"weight"`
-
-	// Optional
-	SystemPrompt string `yaml:"system_prompt"`
-
-	// Optional. Failover
-	Failover FailoverConfig `yaml:"failover"`
-}
-
-type TranslatorConfig struct {
-	DefaultTranslatorConfig `yaml:",inline"`
-
-	// Required
-	Name string `yaml:"name"`
-
-	// Required
-	Type string `yaml:"type"`
-
-	// Positive
-	Timeout int64 `yaml:"timeout"`
-
-	// Optional
-	Model string `yaml:"model"`
-
-	// Required
-	Endpoint string `yaml:"endpoint"`
-
-	// Optional
-	Token string `yaml:"token"`
-
-	// Optional
-	RateLimitConfig `yaml:"rate_limit"`
-}
-
-func (tic *TranslatorConfig) CheckAndMergeDefaultConfig(dtc DefaultTranslatorConfig) (err error) {
-	if tic.Name == "" {
-		err = fmt.Errorf("translator name is required")
-		return
-	}
-
-	if tic.Type == "" {
-		err = fmt.Errorf("translator type is required")
-		return
-	}
-
-	if tic.Weight <= 0 {
-		if dtc.Weight <= 0 {
-			err = fmt.Errorf("translator weight must be positive")
-			return
-		}
-		tic.Weight = dtc.Weight
-	}
-
-	if tic.SystemPrompt == "" {
-		tic.SystemPrompt = dtc.SystemPrompt
-	}
-
-	if tic.Timeout <= 0 {
-		err = fmt.Errorf("translator timeout must be positive")
-		return
-	}
-
-	if tic.Endpoint == "" {
-		err = fmt.Errorf("translator endpoint is required")
-		return
-	}
-
-	// Failover
-	if tic.Failover.MaxFailures < 1 {
-		tic.Failover.MaxFailures = dtc.Failover.MaxFailures
-	}
-
-	if tic.Failover.CooldownBaseSec <= 0 {
-		tic.Failover.CooldownBaseSec = dtc.Failover.CooldownBaseSec
-		if tic.Failover.CooldownBaseSec <= 0 {
-			err = fmt.Errorf("the failover cooldown must be positive")
-			return
-		}
-	}
-
-	if tic.Failover.MaxDisableCycles < 1 {
-		tic.Failover.MaxDisableCycles = dtc.Failover.MaxDisableCycles
-	}
-	if tic.Failover.MaxDisableCycles <= 1 {
-		logrus.Warnf(
-			"you set the failover max disable cycles as %d, which might causes translator will be DISABLED PERMANENTLY IF ANY FAILURE OCCURRED",
-			tic.Failover.MaxDisableCycles)
-	}
-
-	// Rate Limit
-	if tic.RateLimitConfig.Enabled {
-		if tic.RateLimitConfig.RefillTPS <= 0.0 {
-			err = fmt.Errorf("translator limiter refill rate must be positive")
-			return
-		}
-
-		if tic.RateLimitConfig.BucketSize <= 0 {
-			err = fmt.Errorf("translator limiter bucket size must be positive")
-			return
-		}
-	}
 	return
 }

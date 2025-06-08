@@ -8,6 +8,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	WRR = "wrr"
+)
+
 // WeightedItem defines the interface that items managed by the generic WRR selector must implement.
 type WeightedItem interface {
 	Item
@@ -24,13 +28,15 @@ type WeightedRoundRobinSelector[T WeightedItem] struct {
 	items             []T
 	totalConfigWeight int
 	mu                *sync.Mutex
+	logger            *logrus.Entry
 }
 
 // NewWeightedRoundRobinSelector creates a new generic WeightedRoundRobinSelector.
 func NewWeightedRoundRobinSelector[T WeightedItem]() *WeightedRoundRobinSelector[T] {
 	return &WeightedRoundRobinSelector[T]{
-		items: make([]T, 0),
-		mu:    &sync.Mutex{},
+		items:  make([]T, 0),
+		mu:     &sync.Mutex{},
+		logger: logrus.WithField("selector", WRR),
 	}
 }
 
@@ -39,20 +45,20 @@ func (s *WeightedRoundRobinSelector[T]) AddItem(item T) {
 	s.mu.Lock()
 	s.items = append(s.items, item)
 	s.totalConfigWeight += item.GetConfigWeight()
-	logrus.Infof("added WRR item '%s', weight: %d", item.GetName(), item.GetConfigWeight())
+	s.logger.Infof("added WRR item '%s', weight: %d", item.GetName(), item.GetConfigWeight())
 	s.mu.Unlock()
 }
 
 // Select chooses an item based on the Smooth Weighted Round Robin algorithm.
 // It returns the selected item or an error if no item is available or all are disabled.
 func (s *WeightedRoundRobinSelector[T]) Select() (item T, err error) {
-	logrus.Trace("attempting to acquire wrr lock")
+	s.logger.Trace("attempting to acquire wrr lock")
 	s.mu.Lock()
-	logrus.Trace("acquired wrr lock")
+	s.logger.Trace("acquired wrr lock")
 
 	defer func() {
 		s.mu.Unlock()
-		logrus.Trace("released wrr lock")
+		s.logger.Trace("released wrr lock")
 	}()
 
 	if len(s.items) == 0 {
@@ -91,13 +97,13 @@ func (s *WeightedRoundRobinSelector[T]) Select() (item T, err error) {
 	selectedItem.SetCurrentWeight(selectedItem.GetCurrentWeight() - s.totalConfigWeight)
 
 	wrrAfter := s.unsafeString()
-	logrus.Tracef("wrr before: %s", wrrBefore)
-	logrus.Tracef("wrr after: %s", wrrAfter)
+	s.logger.Tracef("wrr before: %s", wrrBefore)
+	s.logger.Tracef("wrr after: %s", wrrAfter)
 
 	// Update the item in the slice if T is a struct
 	s.items[selectedIndex] = selectedItem
 
-	logrus.Debugf("selected item: %s", selectedItem.GetName())
+	s.logger.Debugf("selected item: %s", selectedItem.GetName())
 	return selectedItem, nil
 }
 
@@ -115,4 +121,8 @@ func (s *WeightedRoundRobinSelector[T]) unsafeString() string {
 	}
 	b, _ := json.Marshal(m)
 	return string(b)
+}
+
+func (s *WeightedRoundRobinSelector[T]) GetType() string {
+	return WRR
 }

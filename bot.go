@@ -8,6 +8,7 @@ import (
 
 	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	"github.com/4O4-Not-F0und/Gura-Bot/translate"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/translator"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 )
@@ -245,15 +246,17 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
-	resp, err := b.translateService.Translate(translate.TranslateRequest{
+	resp, translatorName, err := b.translateService.Translate(translator.TranslateRequest{
 		Text:    msg.Content,
 		TraceId: msg.TraceId,
 	})
-	msg.logger = msg.logger.WithField("translator_name", resp.TranslatorName)
+	if translatorName != "" {
+		msg.logger = msg.logger.WithField("translator_name", translatorName)
+	}
 	if err != nil {
 		msg.onMessageHandleFailed()
 
-		var te = new(translate.TranslateError)
+		var te = new(translator.TranslateError)
 		if errors.As(err, &te) {
 			msg.logger.Debugf("http request: %s", base64.StdEncoding.EncodeToString(te.DumpRequest(true)))
 			msg.logger.Debugf("http response: %s", base64.StdEncoding.EncodeToString(te.DumpResponse(true)))

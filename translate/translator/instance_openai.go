@@ -1,4 +1,4 @@
-package translate
+package translator
 
 import (
 	"context"
@@ -10,10 +10,19 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	instanceTypeOpenAI = "openai"
+)
+
+func init() {
+	registerTranslatorInstance(instanceTypeOpenAI, newOpenAIInstance)
+}
+
 // TranslatorInstanceOpenAI implements the translation logic using the OpenAI style API.
 // It embeds baseTranslator for common functionalities.
-type TranslatorInstanceOpenAI struct {
+type InstanceOpenAI struct {
 	name         string
+	logger       *logrus.Entry
 	aiClient     openai.Client
 	systemPrompt string
 	model        string
@@ -23,11 +32,13 @@ type TranslatorInstanceOpenAI struct {
 // It validates the provided TranslateConfig and configures the OpenAI client,
 // language detector, rate limiter, and other parameters.
 // Returns an error if any critical configuration is missing or invalid.
-func newTranslatorInstanceOpenAI(conf TranslatorConfig) (c *TranslatorInstanceOpenAI, err error) {
+func newOpenAIInstance(conf TranslatorConfig) (c Instance, err error) {
+	logger := logrus.WithField("translator_instance", conf.Name)
+
 	openaiOpts := []option.RequestOption{}
 
 	if conf.Token == "" {
-		logrus.Warn("no API token configured, using empty")
+		logger.Warn("no API token configured, using empty")
 	} else {
 		openaiOpts = append(openaiOpts, option.WithAPIKey(conf.Token))
 	}
@@ -40,27 +51,28 @@ func newTranslatorInstanceOpenAI(conf TranslatorConfig) (c *TranslatorInstanceOp
 		return
 	}
 
-	c = new(TranslatorInstanceOpenAI)
-	c.aiClient = openai.NewClient(openaiOpts...)
-	c.model = conf.Model
+	instance := new(InstanceOpenAI)
+	instance.aiClient = openai.NewClient(openaiOpts...)
+	instance.model = conf.Model
 
 	// Already validated, just set it
-	c.name = conf.Name
-	c.systemPrompt = conf.SystemPrompt
+	instance.name = conf.Name
+	instance.systemPrompt = conf.SystemPrompt
+	instance.logger = logger
 
-	logrus.Debugf("initialized OpenAI translator with model: %s, api url: %s",
-		c.model, conf.Endpoint)
-	return
+	instance.logger.Debugf("initialized OpenAI instance, model: %s, api url: %s",
+		instance.model, conf.Endpoint)
+	return instance, nil
 }
 
-func (t *TranslatorInstanceOpenAI) Name() string {
+func (t *InstanceOpenAI) Name() string {
 	return t.name
 }
 
 // Translate sends the given text to the OpenAI API for translation.
 // It respects the configured timeout and rate limiter.
 // Returns the API's chat completion response or an error.
-func (t *TranslatorInstanceOpenAI) Translate(ctx context.Context, req TranslateRequest) (resp *TranslateResponse, err error) {
+func (t *InstanceOpenAI) Translate(ctx context.Context, req TranslateRequest) (resp *TranslateResponse, err error) {
 	var chatCompletion *openai.ChatCompletion
 	chatCompletion, err = t.aiClient.Chat.Completions.New(
 		ctx,
