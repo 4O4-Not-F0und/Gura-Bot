@@ -15,7 +15,7 @@ type DefaultTranslatorConfig struct {
 	SystemPrompt string `yaml:"system_prompt"`
 
 	// Optional. Failover
-	Failover common.FailoverConfig `yaml:"failover"`
+	Failover common.FailoverConfig `yaml:"failover,omitempty"`
 }
 
 type TranslatorConfig struct {
@@ -67,7 +67,7 @@ func (tic *TranslatorConfig) CheckAndMergeDefaultConfig(dtc DefaultTranslatorCon
 	}
 
 	if tic.Timeout <= 0 {
-		err = fmt.Errorf("translator timeout must be positive")
+		err = fmt.Errorf("%s: translator timeout must be positive", tic.Name)
 		return
 	}
 

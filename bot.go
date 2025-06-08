@@ -8,6 +8,8 @@ import (
 
 	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	"github.com/4O4-Not-F0und/Gura-Bot/translate"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/common"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/detector"
 	"github.com/4O4-Not-F0und/Gura-Bot/translate/translator"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
@@ -235,11 +237,19 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
-	lang, confidence, err := b.translateService.DetectLang(msg.Content)
-	msg.logger = msg.logger.WithFields(logrus.Fields{
-		"lang":            lang,
-		"lang_confidence": confidence,
+	langResp, detectorName, err := b.translateService.DetectLang(detector.DetectRequest{
+		Text:    msg.Content,
+		TraceId: msg.TraceId,
 	})
+	if detectorName != "" {
+		msg.logger = msg.logger.WithField("detector_name", detectorName)
+	}
+	if langResp != nil {
+		msg.logger = msg.logger.WithFields(logrus.Fields{
+			"lang":            langResp.Language,
+			"lang_confidence": langResp.Confidence,
+		})
+	}
 	if err != nil {
 		msg.logger.Warn(err)
 		msg.onMessageHandleFailed()
@@ -256,7 +266,7 @@ func (b *Bot) handleMessage(msg *Message) {
 	if err != nil {
 		msg.onMessageHandleFailed()
 
-		var te = new(translator.TranslateError)
+		var te = new(common.HTTPError)
 		if errors.As(err, &te) {
 			msg.logger.Debugf("http request: %s", base64.StdEncoding.EncodeToString(te.DumpRequest(true)))
 			msg.logger.Debugf("http response: %s", base64.StdEncoding.EncodeToString(te.DumpResponse(true)))

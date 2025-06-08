@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/common"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/sirupsen/logrus"
@@ -92,8 +93,8 @@ func (t *InstanceOpenAI) Translate(ctx context.Context, req TranslateRequest) (r
 			req := apiErr.Request.Clone(context.Background())
 			req.Header = apiErr.Request.Header.Clone()
 			req.Header.Set("Authorization", "********")
-			err = fmt.Errorf("%w", &TranslateError{
-				e:        err,
+			err = fmt.Errorf("%w", &common.HTTPError{
+				Err:      err,
 				Request:  req,
 				Response: apiErr.Response,
 			})

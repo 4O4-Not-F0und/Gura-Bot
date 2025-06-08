@@ -25,30 +25,10 @@ translate_service:
   retry_cooldown: 30
 
   # Configuration for language detectors
-  # Can be "fallback" or "wrr" (Weighted Round Robin)
-  language_detector_selector: fallback
-  language_detectors:
-    - name: "lingua_default"
-      # Specifies the type of detector
-      type: "lingua"
-      # Used if language_detector_selector is "wrr"
-      weight: 1
-      # Configuration specific to the 'lingua' type
-      lingua:
-        # A list of ISO 639-1 language codes that this lingua-go instance should be configured to detect.
-        detect_langs:
-          - ZH
-          - JA
-          - EN
-        # Minimum confidence score (0.0, 1.0] required for a detected language to be considered valid by this detector.
-        source_lang_confidence_threshold: 0.9
-        # A list of ISO 639-1 language codes that this detector will report as valid.
-        source_lang_filter: ["JA", "EN"]
-
   # default settings
-  default_translator_config:
+  default_detector_config:
     # failover settings
-    #  this config will disable translators consistely fail for:
+    #  this config will disable it consistely fail for:
     #  1  failure:  no cooldown
     #  2  failures: no cooldown
     #  3  failures: 1 * 120 secs cooldown
@@ -57,6 +37,42 @@ translate_service:
     #  12 failures: 4 * 120 secs cooldown
     #  15 failures: 5 * 120 secs cooldown
     #  18 failures: disable it until next config reloading or restarting
+    failover:
+      max_failures: 3
+      cooldown_base_sec: 120
+      max_disable_cycles: 6
+    timeout: 60
+    # Used if language_detector_selector is "wrr"
+    weight: 1
+    # A list of ISO 639-1 language codes that should be configured to detect.
+    detect_langs:
+      - ZH
+      - JA
+      - EN
+    # Minimum confidence score required for a detected language to be considered valid by this detector.
+    source_lang_confidence_threshold: 0.9
+    # A list of ISO 639-1 language codes that this detector will report as valid.
+    source_lang_filter: 
+      - JA
+      - EN
+  # Can be "fallback" or "wrr" (Weighted Round Robin)
+  language_detector_selector: fallback
+  language_detectors:
+    - name: lingua_default
+      # Specifies the type of detector
+      type: lingua
+      rate_limit:
+        enabled: false
+        # The burst capacity of the rate limiter.
+        # Set bucket_size to 1 to disable burst.
+        bucket_size: 5
+        # The rate at which tokens are refilled to the bucket per second.
+        # e.g.: 0.1 means 6r/min
+        refill_token_per_sec: 0.1
+
+  # default settings
+  default_translator_config:
+    # failover settings
     failover:
       max_failures: 3
       cooldown_base_sec: 120
@@ -77,6 +93,7 @@ translate_service:
 
       Now, please strictly follow the requirements above to translate the content provided by the user, without any deviation.
 
+  # Can be "fallback" or "wrr" (Weighted Round Robin)
   translator_selector: fallback
   translators:
     - name: translator-01

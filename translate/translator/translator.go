@@ -3,8 +3,6 @@ package translator
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/http/httputil"
 	"sync"
 	"time"
 
@@ -39,21 +37,21 @@ var (
 		translationTokenUsedTypePrompt,
 	}
 
-	translatorInstances = map[string]newTranslatorInstanceFunc{}
+	registeredTranslatorInstances = map[string]newTranslatorInstanceFunc{}
 )
 
 type newTranslatorInstanceFunc func(TranslatorConfig) (Instance, error)
 
 func registerTranslatorInstance(name string, f newTranslatorInstanceFunc) {
-	if _, ok := translatorInstances[name]; !ok {
-		translatorInstances[name] = f
+	if _, ok := registeredTranslatorInstances[name]; !ok {
+		registeredTranslatorInstances[name] = f
 		return
 	}
-	panic(fmt.Sprintf("duplicated translator instance: %s", name))
+	panic(fmt.Sprintf("translator instance type '%s' already registered", name))
 }
 
 func NewInstance(conf TranslatorConfig) (Instance, error) {
-	if f, ok := translatorInstances[conf.Type]; ok {
+	if f, ok := registeredTranslatorInstances[conf.Type]; ok {
 		return f(conf)
 	}
 	return nil, fmt.Errorf("unknown translator type: %s", conf.Type)
@@ -95,29 +93,6 @@ type TranslateResponse struct {
 		Completion int64
 		Prompt     int64
 	}
-}
-
-type TranslateError struct {
-	e        error
-	Request  *http.Request
-	Response *http.Response
-}
-
-func (r *TranslateError) DumpRequest(body bool) []byte {
-	if r.Request.GetBody != nil {
-		r.Request.Body, _ = r.Request.GetBody()
-	}
-	out, _ := httputil.DumpRequestOut(r.Request, body)
-	return out
-}
-
-func (r *TranslateError) DumpResponse(body bool) []byte {
-	out, _ := httputil.DumpResponse(r.Response, body)
-	return out
-}
-
-func (r *TranslateError) Error() string {
-	return r.e.Error()
 }
 
 type TranslatorOptions struct {
@@ -173,7 +148,7 @@ type CommonTranslator struct {
 	// Weighted
 	configWeight  int
 	currentWeight int
-	mu            *sync.Mutex
+	weightedMu    *sync.Mutex
 }
 
 func NewCommonTranslator(opts TranslatorOptions) (ct *CommonTranslator) {
@@ -194,7 +169,7 @@ func NewCommonTranslator(opts TranslatorOptions) (ct *CommonTranslator) {
 		// Weighted
 		configWeight:  opts.Weight,
 		currentWeight: 0,
-		mu:            &sync.Mutex{},
+		weightedMu:    &sync.Mutex{},
 	}
 	// Initialize metrics
 	ct.upMetric.WithLabelValues(ct.GetName()).Set(1)
@@ -333,19 +308,19 @@ func (ct *CommonTranslator) IsDisabled() bool {
 }
 
 func (ct *CommonTranslator) GetConfigWeight() int {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.weightedMu.Lock()
+	defer ct.weightedMu.Unlock()
 	return ct.configWeight
 }
 
 func (ct *CommonTranslator) GetCurrentWeight() int {
-	ct.mu.Lock()
-	defer ct.mu.Unlock()
+	ct.weightedMu.Lock()
+	defer ct.weightedMu.Unlock()
 	return ct.currentWeight
 }
 
 func (ct *CommonTranslator) SetCurrentWeight(s int) {
-	ct.mu.Lock()
+	ct.weightedMu.Lock()
 	ct.currentWeight = s
-	ct.mu.Unlock()
+	ct.weightedMu.Unlock()
 }
