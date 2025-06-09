@@ -6,14 +6,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
 	"github.com/4O4-Not-F0und/Gura-Bot/selector"
 	"github.com/4O4-Not-F0und/Gura-Bot/translate/common"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
 )
 
+const (
+	detectionStatePending    = "pending"
+	detectionStateProcessing = "processing"
+	detectionStateSuccess    = "success"
+	detectionStateFailed     = "failed"
+)
+
 var (
 	registeredDetectorInstances = map[string]newDetectorInstanceFunc{}
+	allDetectionTaskStates      = []string{
+		detectionStatePending,
+		detectionStateProcessing,
+		detectionStateSuccess,
+		detectionStateFailed,
+	}
 )
 
 type newDetectorInstanceFunc func(DetectorConfig) (Instance, error)
@@ -44,6 +59,9 @@ func NewDetector(selectorType string, conf DetectorConfig) (LanguageDetector, er
 		Timeout:         conf.Timeout,
 		FailoverConfig:  conf.Failover,
 		RateLimitConfig: conf.RateLimit,
+		UpMetric:        metrics.MetricDetectorUp,
+		SelectionMetric: metrics.MetricDetectorSelectionTotal,
+		TasksMetric:     metrics.MetricDetectorTasks,
 		Weight:          conf.Weight,
 	}
 
@@ -79,12 +97,9 @@ type DetectorOptions struct {
 	FailoverConfig  common.FailoverConfig
 	RateLimitConfig common.RateLimitConfig
 
-	/* Metrics
-	UpMetric         *prometheus.GaugeVec
-	SelectionMetric  *prometheus.CounterVec
-	TasksMetric      *prometheus.GaugeVec
-	TokensUsedMetric *prometheus.CounterVec
-	*/
+	UpMetric        *prometheus.GaugeVec
+	SelectionMetric *prometheus.CounterVec
+	TasksMetric     *prometheus.GaugeVec
 
 	// WRR
 	Weight int
@@ -96,6 +111,11 @@ type GeneralLanguageDetector struct {
 	limiter         *rate.Limiter
 	timeout         time.Duration
 	failoverHandler common.FailoverHandler
+
+	// Metrics
+	upMetric        *prometheus.GaugeVec
+	selectionMetric *prometheus.CounterVec
+	tasksMetric     *prometheus.GaugeVec
 
 	// Weighted
 	configWeight  int
@@ -109,18 +129,30 @@ func newGeneralLanguageDetector(opts DetectorOptions) (gld *GeneralLanguageDetec
 		timeout:  time.Duration(opts.Timeout) * time.Second,
 		logger:   logrus.WithField("detector_name", opts.Instance.Name()),
 
+		// Metrics
+		upMetric:        opts.UpMetric,
+		selectionMetric: opts.SelectionMetric,
+		tasksMetric:     opts.TasksMetric,
+
 		// Weighted
 		configWeight:  opts.Weight,
 		currentWeight: 0,
 		weightedMu:    new(sync.Mutex),
 	}
+	// Initialize metrics
+	gld.upMetric.WithLabelValues(gld.GetName()).Set(1)
+	gld.selectionMetric.WithLabelValues(gld.GetName()).Add(0.0)
+	for _, state := range allDetectionTaskStates {
+		gld.tasksMetric.WithLabelValues(state, gld.GetName()).Add(0.0)
+	}
+
 	gld.failoverHandler = common.NewGeneralFailoverHandler(opts.FailoverConfig, gld.logger)
 	gld.limiter = opts.RateLimitConfig.NewLimiterFromConfig(gld.logger)
 	return
 }
 
 func (gld *GeneralLanguageDetector) Detect(req DetectRequest) (resp *DetectResponse, err error) {
-	// gld.selectionMetric.WithLabelValues(gld.GetName()).Inc()
+	gld.selectionMetric.WithLabelValues(gld.GetName()).Inc()
 
 	ctx, cancel := context.WithTimeout(context.Background(), gld.timeout)
 	defer cancel()
@@ -128,29 +160,19 @@ func (gld *GeneralLanguageDetector) Detect(req DetectRequest) (resp *DetectRespo
 	logger := gld.logger.WithField("trace_id", req.TraceId)
 
 	logger.Trace("wating for limiter")
-	// gld.tasksMetric.WithLabelValues(translationStatePending, gld.GetName()).Inc()
+	gld.tasksMetric.WithLabelValues(detectionStatePending, gld.GetName()).Inc()
 	err = gld.wait(ctx)
-	// gld.tasksMetric.WithLabelValues(translationStatePending, gld.GetName()).Dec()
+	gld.tasksMetric.WithLabelValues(detectionStatePending, gld.GetName()).Dec()
 	if err != nil {
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
 	logger.Trace("acquired limiter")
 
-	// gld.tasksMetric.WithLabelValues(translationStateProcessing, gld.GetName()).Inc()
-	// defer gld.tasksMetric.WithLabelValues(translationStateProcessing, gld.GetName()).Dec()
+	gld.tasksMetric.WithLabelValues(detectionStateProcessing, gld.GetName()).Inc()
+	defer gld.tasksMetric.WithLabelValues(detectionStateProcessing, gld.GetName()).Dec()
 
 	logger.Debug("wating for detect response")
 	resp, err = gld.instance.Detect(ctx, req)
-	/*
-		if tr != nil {
-			gld.tokensUsedMetric.WithLabelValues(
-				translationTokenUsedTypeCompletion, gld.GetName()).Add(
-				float64(tr.TokenUsage.Completion))
-			gld.tokensUsedMetric.WithLabelValues(
-				translationTokenUsedTypePrompt, gld.GetName()).Add(
-				float64(tr.TokenUsage.Prompt))
-		}
-	*/
 
 	if err != nil {
 		gld.onFailure()
@@ -172,11 +194,16 @@ func (gld *GeneralLanguageDetector) GetName() string {
 }
 
 func (gld *GeneralLanguageDetector) onSuccess() {
+	gld.tasksMetric.WithLabelValues(detectionStateSuccess, gld.GetName()).Inc()
+	gld.upMetric.WithLabelValues(gld.GetName()).Set(1)
 	gld.failoverHandler.OnSuccess()
 }
 
 func (gld *GeneralLanguageDetector) onFailure() {
-	gld.failoverHandler.OnFailure()
+	gld.tasksMetric.WithLabelValues(detectionStateFailed, gld.GetName()).Inc()
+	if gld.failoverHandler.OnFailure() {
+		gld.upMetric.WithLabelValues(gld.GetName()).Set(0)
+	}
 }
 
 func (gld *GeneralLanguageDetector) IsDisabled() bool {

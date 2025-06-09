@@ -75,6 +75,40 @@ var (
 		},
 		[]string{"translator_name"},
 	)
+
+	// States: "pending" (waiting for rate limiter),
+	//         "processing" (waiting for translation API response),
+	//         "success" (translation and parsing successful),
+	//         "failed" (any step in translation failed).
+	MetricDetectorTasks = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "detector_tasks_total",
+			Help:      "Total number of translation tasks, by state.",
+		},
+		[]string{"state", "detector_name"},
+	)
+
+	// Gauge for detector up status
+	// Value is 1 if the detector is up, 0 if it is disabled.
+	MetricDetectorUp = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "detector_up",
+			Help:      "Indicates if a detector is currently up and operational. 1 for up, 0 for disabled.",
+		},
+		[]string{"detector_name"},
+	)
+
+	// Gauge for detector selected times
+	MetricDetectorSelectionTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "detector_selection_total",
+			Help:      "Times of detector instance was chosen.",
+		},
+		[]string{"detector_name"},
+	)
 )
 
 func InitMetricServer(conf MetricConfig) {
