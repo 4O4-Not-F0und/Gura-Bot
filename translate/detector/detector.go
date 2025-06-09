@@ -43,7 +43,7 @@ func NewDetector(selectorType string, conf DetectorConfig) (LanguageDetector, er
 		Instance:        instance,
 		Timeout:         conf.Timeout,
 		FailoverConfig:  conf.Failover,
-		RateLimitConfig: conf.RateLimitConfig,
+		RateLimitConfig: conf.RateLimit,
 		Weight:          conf.Weight,
 	}
 
@@ -67,9 +67,6 @@ type DetectResponse struct {
 type LanguageDetector interface {
 	selector.WeightedItem
 
-	OnSuccess()
-	OnFailure()
-	IsDisabled() bool
 	Detect(DetectRequest) (*DetectResponse, error)
 	GetName() string
 }
@@ -94,19 +91,11 @@ type DetectorOptions struct {
 }
 
 type GeneralLanguageDetector struct {
-	instance Instance
-	logger   *logrus.Entry
-	limiter  *rate.Limiter
-	timeout  time.Duration
-
-	// Failover
-	failoverConfig            common.FailoverConfig
-	failures                  int
-	currentCooldownMultiplier int
-	disableCycleCount         int
-	disableUntil              time.Time
-	isPermanentlyDisabled     bool
-	failoverMu                *sync.Mutex
+	instance        Instance
+	logger          *logrus.Entry
+	limiter         *rate.Limiter
+	timeout         time.Duration
+	failoverHandler common.FailoverHandler
 
 	// Weighted
 	configWeight  int
@@ -116,19 +105,16 @@ type GeneralLanguageDetector struct {
 
 func newGeneralLanguageDetector(opts DetectorOptions) (gld *GeneralLanguageDetector) {
 	gld = &GeneralLanguageDetector{
-		instance:              opts.Instance,
-		timeout:               time.Duration(opts.Timeout) * time.Second,
-		failoverConfig:        opts.FailoverConfig,
-		failoverMu:            new(sync.Mutex),
-		isPermanentlyDisabled: false,
-		logger:                logrus.WithField("detector_name", opts.Instance.Name()),
+		instance: opts.Instance,
+		timeout:  time.Duration(opts.Timeout) * time.Second,
+		logger:   logrus.WithField("detector_name", opts.Instance.Name()),
 
 		// Weighted
 		configWeight:  opts.Weight,
 		currentWeight: 0,
 		weightedMu:    new(sync.Mutex),
 	}
-	gld.resetFailoverState()
+	gld.failoverHandler = common.NewGeneralFailoverHandler(opts.FailoverConfig, gld.logger)
 
 	// Initialize rate limiter
 	if opts.RateLimitConfig.Enabled {
@@ -180,10 +166,10 @@ func (gld *GeneralLanguageDetector) Detect(req DetectRequest) (resp *DetectRespo
 	*/
 
 	if err != nil {
-		gld.OnFailure()
+		gld.onFailure()
 		return
 	}
-	gld.OnSuccess()
+	gld.onSuccess()
 	return
 }
 
@@ -198,56 +184,16 @@ func (gld *GeneralLanguageDetector) GetName() string {
 	return gld.instance.Name()
 }
 
-func (gld *GeneralLanguageDetector) OnSuccess() {
-	gld.failoverMu.Lock()
-	rst := gld.failures > 0 || gld.currentCooldownMultiplier > 0 || gld.disableCycleCount > 0
-	gld.failoverMu.Unlock()
-	if rst {
-		gld.resetFailoverState()
-	}
+func (gld *GeneralLanguageDetector) onSuccess() {
+	gld.failoverHandler.OnSuccess()
 }
 
-func (gld *GeneralLanguageDetector) resetFailoverState() {
-	gld.failoverMu.Lock()
-	gld.failures = 0
-	gld.currentCooldownMultiplier = 0
-	gld.disableCycleCount = 0
-	gld.isPermanentlyDisabled = false
-	gld.failoverMu.Unlock()
-	gld.logger.Debug("failover state reset")
-}
-
-func (gld *GeneralLanguageDetector) OnFailure() {
-	gld.logger.Warnf("New failure. Current failures: %d/%d", gld.failures, gld.failoverConfig.MaxFailures)
-	gld.failoverMu.Lock()
-	defer gld.failoverMu.Unlock()
-
-	gld.failures += 1
-	if gld.failures >= gld.failoverConfig.MaxFailures {
-		gld.failures = 0
-		gld.currentCooldownMultiplier += 1
-		gld.disableCycleCount += 1
-		if gld.disableCycleCount >= gld.failoverConfig.MaxDisableCycles {
-			gld.logger.Errorf("Reached maximum disable cycles: %d. Translator permanently disabled",
-				gld.failoverConfig.MaxDisableCycles)
-			gld.isPermanentlyDisabled = true
-			return
-		}
-		gld.disableUntil = time.Now().Add(
-			time.Duration(
-				gld.currentCooldownMultiplier*
-					gld.failoverConfig.CooldownBaseSec,
-			) * time.Second)
-		gld.logger.Warnf("reached maximum failures, disable it until %s",
-			gld.disableUntil.Local().Format(time.RFC3339Nano))
-	}
+func (gld *GeneralLanguageDetector) onFailure() {
+	gld.failoverHandler.OnFailure()
 }
 
 func (gld *GeneralLanguageDetector) IsDisabled() bool {
-	gld.failoverMu.Lock()
-	ret := gld.isPermanentlyDisabled || time.Now().Before(gld.disableUntil)
-	gld.failoverMu.Unlock()
-	return ret
+	return gld.failoverHandler.IsDisabled()
 }
 
 func (gld *GeneralLanguageDetector) GetConfigWeight() int {

@@ -71,7 +71,7 @@ func NewTranslator(selectorType string, conf TranslatorConfig) (Translator, erro
 		TasksMetric:      metrics.MetricTranslatorTasks,
 		TokensUsedMetric: metrics.MetricTranslatorTokensUsed,
 		FailoverConfig:   conf.Failover,
-		RateLimitConfig:  conf.RateLimitConfig,
+		RateLimitConfig:  conf.RateLimit,
 		Weight:           conf.Weight,
 	}
 
@@ -116,34 +116,22 @@ type TranslatorOptions struct {
 type Translator interface {
 	selector.WeightedItem
 
-	OnSuccess()
-	OnFailure()
-	IsDisabled() bool
-	// ResetFailoverState()
 	Translate(TranslateRequest) (*TranslateResponse, error)
 	GetName() string
 }
 
 type CommonTranslator struct {
-	instance Instance
-	logger   *logrus.Entry
-	limiter  *rate.Limiter
-	timeout  time.Duration
+	instance        Instance
+	logger          *logrus.Entry
+	limiter         *rate.Limiter
+	timeout         time.Duration
+	failoverHandler common.FailoverHandler
 
 	// Metrics
 	upMetric         *prometheus.GaugeVec
 	selectionMetric  *prometheus.CounterVec
 	tasksMetric      *prometheus.GaugeVec
 	tokensUsedMetric *prometheus.CounterVec
-
-	// Failover
-	failoverConfig            common.FailoverConfig
-	failures                  int
-	currentCooldownMultiplier int
-	disableCycleCount         int
-	disableUntil              time.Time
-	isPermanentlyDisabled     bool
-	failoverMu                *sync.Mutex
 
 	// Weighted
 	configWeight  int
@@ -161,11 +149,6 @@ func NewCommonTranslator(opts TranslatorOptions) (ct *CommonTranslator) {
 		tasksMetric:      opts.TasksMetric,
 		tokensUsedMetric: opts.TokensUsedMetric,
 
-		// Failover
-		failoverConfig:        opts.FailoverConfig,
-		failoverMu:            new(sync.Mutex),
-		isPermanentlyDisabled: false,
-
 		// Weighted
 		configWeight:  opts.Weight,
 		currentWeight: 0,
@@ -182,7 +165,7 @@ func NewCommonTranslator(opts TranslatorOptions) (ct *CommonTranslator) {
 	}
 
 	ct.logger = logrus.WithField("translator_name", ct.GetName())
-	ct.resetFailoverState()
+	ct.failoverHandler = common.NewGeneralFailoverHandler(opts.FailoverConfig, ct.logger)
 
 	// Initialize rate limiter
 	if opts.RateLimitConfig.Enabled {
@@ -239,10 +222,10 @@ func (ct *CommonTranslator) Translate(req TranslateRequest) (tr *TranslateRespon
 	}
 
 	if err != nil {
-		ct.OnFailure()
+		ct.onFailure()
 		return
 	}
-	ct.OnSuccess()
+	ct.onSuccess()
 	return
 }
 
@@ -250,61 +233,21 @@ func (ct *CommonTranslator) GetName() string {
 	return ct.instance.Name()
 }
 
-func (ct *CommonTranslator) OnSuccess() {
+func (ct *CommonTranslator) onSuccess() {
 	ct.tasksMetric.WithLabelValues(translationStateSuccess, ct.GetName()).Inc()
 	ct.upMetric.WithLabelValues(ct.GetName()).Set(1)
-
-	ct.failoverMu.Lock()
-	rst := ct.failures > 0 || ct.currentCooldownMultiplier > 0 || ct.disableCycleCount > 0
-	ct.failoverMu.Unlock()
-	if rst {
-		ct.resetFailoverState()
-	}
+	ct.failoverHandler.OnSuccess()
 }
 
-func (ct *CommonTranslator) resetFailoverState() {
-	ct.failoverMu.Lock()
-	ct.failures = 0
-	ct.currentCooldownMultiplier = 0
-	ct.disableCycleCount = 0
-	ct.isPermanentlyDisabled = false
-	ct.failoverMu.Unlock()
-	ct.logger.Debug("failover state reset")
-}
-
-func (ct *CommonTranslator) OnFailure() {
-	ct.logger.Warnf("New failure. Current failures: %d/%d", ct.failures, ct.failoverConfig.MaxFailures)
+func (ct *CommonTranslator) onFailure() {
 	ct.tasksMetric.WithLabelValues(translationStateFailed, ct.GetName()).Inc()
-	ct.failoverMu.Lock()
-	defer ct.failoverMu.Unlock()
-
-	ct.failures += 1
-	if ct.failures >= ct.failoverConfig.MaxFailures {
+	if ct.failoverHandler.OnFailure() {
 		ct.upMetric.WithLabelValues(ct.GetName()).Set(0)
-		ct.failures = 0
-		ct.currentCooldownMultiplier += 1
-		ct.disableCycleCount += 1
-		if ct.disableCycleCount >= ct.failoverConfig.MaxDisableCycles {
-			ct.logger.Errorf("Reached maximum disable cycles: %d. Translator permanently disabled",
-				ct.failoverConfig.MaxDisableCycles)
-			ct.isPermanentlyDisabled = true
-			return
-		}
-		ct.disableUntil = time.Now().Add(
-			time.Duration(
-				ct.currentCooldownMultiplier*
-					ct.failoverConfig.CooldownBaseSec,
-			) * time.Second)
-		ct.logger.Warnf("reached maximum failures, disable it until %s",
-			ct.disableUntil.Local().Format(time.RFC3339Nano))
 	}
 }
 
 func (ct *CommonTranslator) IsDisabled() bool {
-	ct.failoverMu.Lock()
-	ret := ct.isPermanentlyDisabled || time.Now().Before(ct.disableUntil)
-	ct.failoverMu.Unlock()
-	return ret
+	return ct.failoverHandler.IsDisabled()
 }
 
 func (ct *CommonTranslator) GetConfigWeight() int {

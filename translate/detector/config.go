@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/4O4-Not-F0und/Gura-Bot/translate/common"
-	"github.com/sirupsen/logrus"
 )
 
 type DefaultDetectorConfig struct {
@@ -44,7 +43,7 @@ type DetectorConfig struct {
 	Token string `yaml:"token"`
 
 	// Optional
-	common.RateLimitConfig `yaml:"rate_limit"`
+	RateLimit common.RateLimitConfig `yaml:"rate_limit"`
 }
 
 func (tic *DetectorConfig) CheckAndMergeDefaultConfig(dtc DefaultDetectorConfig) (err error) {
@@ -95,38 +94,13 @@ func (tic *DetectorConfig) CheckAndMergeDefaultConfig(dtc DefaultDetectorConfig)
 	}
 
 	// Failover
-	if tic.Failover.MaxFailures < 1 {
-		tic.Failover.MaxFailures = dtc.Failover.MaxFailures
-	}
-
-	if tic.Failover.CooldownBaseSec <= 0 {
-		tic.Failover.CooldownBaseSec = dtc.Failover.CooldownBaseSec
-		if tic.Failover.CooldownBaseSec <= 0 {
-			err = fmt.Errorf("%s: the failover cooldown must be positive", tic.Name)
-			return
-		}
-	}
-
-	if tic.Failover.MaxDisableCycles < 1 {
-		tic.Failover.MaxDisableCycles = dtc.Failover.MaxDisableCycles
-	}
-	if tic.Failover.MaxDisableCycles <= 1 {
-		logrus.Warnf(
-			"%s: you set the failover max disable cycles as %d, which might causes detector will be DISABLED PERMANENTLY IF ANY FAILURE OCCURRED",
-			tic.Name, tic.Failover.MaxDisableCycles)
+	err = tic.Failover.CheckAndMerge(dtc.Failover)
+	if err != nil {
+		err = fmt.Errorf("%s: %w", tic.Name, err)
+		return
 	}
 
 	// Rate Limit
-	if tic.RateLimitConfig.Enabled {
-		if tic.RateLimitConfig.RefillTPS <= 0.0 {
-			err = fmt.Errorf("%s: limiter refill rate must be positive", tic.Name)
-			return
-		}
-
-		if tic.RateLimitConfig.BucketSize <= 0 {
-			err = fmt.Errorf("%s: limiter bucket size must be positive", tic.Name)
-			return
-		}
-	}
+	err = tic.RateLimit.Check()
 	return
 }
