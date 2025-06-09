@@ -3,7 +3,6 @@ package detector
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/pemistahl/lingua-go"
 	"github.com/sirupsen/logrus"
@@ -65,17 +64,8 @@ func (ld *InstanceLingua) Detect(_ context.Context, req DetectRequest) (resp *De
 		}
 	}
 
-	if lang == "" {
-		err = fmt.Errorf("no language detected")
-		return
-	}
-	if !slices.Contains(ld.sourceLangs, lang) {
-		err = fmt.Errorf("detected language '%s' is not in the configured source language filter", lang)
-		return
-	}
-	if confidence < ld.confidenceThreshold {
-		err = fmt.Errorf("detected language '%s' (confidence: %.2f) is below threshold (%.2f)",
-			lang, confidence, ld.confidenceThreshold)
+	err = ld.checkDetectResult(lang, confidence)
+	if err != nil {
 		return
 	}
 

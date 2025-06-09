@@ -175,6 +175,11 @@ func (gld *GeneralLanguageDetector) Detect(req DetectRequest) (resp *DetectRespo
 	resp, err = gld.instance.Detect(ctx, req)
 
 	if err != nil {
+		// WeakError shouldn't trigger failure event
+		if CheckWeakError(err) {
+			return
+		}
+
 		gld.onFailure()
 		return
 	}

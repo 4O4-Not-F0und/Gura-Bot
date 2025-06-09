@@ -64,7 +64,7 @@ func (gfh *GeneralFailoverHandler) resetState() {
 // Returns true if the component has just entered a disabled state
 // (cooldown or permanent) due to this failure.
 func (gfh *GeneralFailoverHandler) OnFailure() (isDisabled bool) {
-	gfh.logger.Warnf("New failure. Current failures: %d/%d", gfh.failures, gfh.failoverConfig.MaxFailures)
+	gfh.logger.Warnf("new failure. Current failures: %d/%d", gfh.failures, gfh.failoverConfig.MaxFailures)
 	gfh.mu.Lock()
 	defer gfh.mu.Unlock()
 
@@ -74,7 +74,7 @@ func (gfh *GeneralFailoverHandler) OnFailure() (isDisabled bool) {
 		gfh.currentCooldownMultiplier += 1
 		gfh.disableCycleCount += 1
 		if gfh.disableCycleCount >= gfh.failoverConfig.MaxDisableCycles {
-			gfh.logger.Errorf("Reached maximum disable cycles: %d. Component permanently disabled",
+			gfh.logger.Errorf("reached maximum disable cycles: %d. Component permanently disabled",
 				gfh.failoverConfig.MaxDisableCycles)
 			gfh.isPermanentlyDisabled = true
 			return true

@@ -143,6 +143,11 @@ func (ts *TranslateService) DetectLang(req detector.DetectRequest) (resp *detect
 			return
 		}
 
+		// WeakError shouldn't retry
+		if detector.CheckWeakError(err) {
+			return
+		}
+
 		if retry >= ts.MaximumRetry {
 			logger.Errorf("no more retries: maximum retries exceeded after %d attempts", retry)
 			return

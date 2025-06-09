@@ -13,10 +13,6 @@ type DefaultDetectorConfig struct {
 	// A list of ISO 639-1 language codes that should be configured to detect.
 	DetectLangs []string `yaml:"detect_langs"`
 
-	// Minimum confidence score required for a detected language to be
-	// considered valid by this detector.
-	SourceLangConfidenceThreshold float64 `yaml:"source_lang_confidence_threshold"`
-
 	// A list of ISO 639-1 language codes that this detector will report as valid.
 	SourceLangFilter []string `yaml:"source_lang_filter"`
 
@@ -35,6 +31,10 @@ type DetectorConfig struct {
 
 	// Positive
 	Timeout int64 `yaml:"timeout"`
+
+	// Minimum confidence score required for a detected language to be
+	// considered valid by this detector.
+	SourceLangConfidenceThreshold float64 `yaml:"source_lang_confidence_threshold"`
 
 	// Required
 	Endpoint string `yaml:"endpoint"`

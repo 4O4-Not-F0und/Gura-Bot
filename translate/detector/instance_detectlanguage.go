@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -82,16 +81,8 @@ func (ld *InstanceDetectLanguage) Detect(ctx context.Context, req DetectRequest)
 		}
 	}
 
-	if lang == "" {
-		err = fmt.Errorf("no reliable language detected")
-		return
-	}
-	if !slices.Contains(ld.sourceLangs, lang) {
-		err = fmt.Errorf("detected language '%s' is not in the configured source language filter", lang)
-		return
-	}
-	if confidence < ld.confidenceThreshold {
-		err = fmt.Errorf("detected language '%s' (confidence: %.2f) is below threshold (%.2f)", lang, confidence, ld.confidenceThreshold)
+	err = ld.checkDetectResult(lang, confidence)
+	if err != nil {
 		return
 	}
 
