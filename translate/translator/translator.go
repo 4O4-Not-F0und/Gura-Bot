@@ -166,20 +166,7 @@ func NewCommonTranslator(opts TranslatorOptions) (ct *CommonTranslator) {
 
 	ct.logger = logrus.WithField("translator_name", ct.GetName())
 	ct.failoverHandler = common.NewGeneralFailoverHandler(opts.FailoverConfig, ct.logger)
-
-	// Initialize rate limiter
-	if opts.RateLimitConfig.Enabled {
-		ct.limiter = rate.NewLimiter(
-			rate.Limit(opts.RateLimitConfig.RefillTPS),
-			opts.RateLimitConfig.BucketSize,
-		)
-		ct.logger.Debugf(
-			"rate limiter refill: %.2f tokens/s, bucket size: %d",
-			opts.RateLimitConfig.RefillTPS,
-			opts.RateLimitConfig.BucketSize,
-		)
-	}
-
+	ct.limiter = opts.RateLimitConfig.NewLimiterFromConfig(ct.logger)
 	return
 }
 

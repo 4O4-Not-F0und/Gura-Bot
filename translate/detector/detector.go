@@ -115,20 +115,7 @@ func newGeneralLanguageDetector(opts DetectorOptions) (gld *GeneralLanguageDetec
 		weightedMu:    new(sync.Mutex),
 	}
 	gld.failoverHandler = common.NewGeneralFailoverHandler(opts.FailoverConfig, gld.logger)
-
-	// Initialize rate limiter
-	if opts.RateLimitConfig.Enabled {
-		gld.limiter = rate.NewLimiter(
-			rate.Limit(opts.RateLimitConfig.RefillTPS),
-			opts.RateLimitConfig.BucketSize,
-		)
-		gld.logger.Debugf(
-			"rate limiter refill: %.2f tokens/s, bucket size: %d",
-			opts.RateLimitConfig.RefillTPS,
-			opts.RateLimitConfig.BucketSize,
-		)
-	}
-
+	gld.limiter = opts.RateLimitConfig.NewLimiterFromConfig(gld.logger)
 	return
 }
 

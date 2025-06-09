@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 type FailoverConfig struct {
@@ -76,4 +77,15 @@ func (rlc *RateLimitConfig) Check() (err error) {
 		}
 	}
 	return
+}
+
+func (rlc *RateLimitConfig) NewLimiterFromConfig(logger *logrus.Entry) *rate.Limiter {
+	if !rlc.Enabled {
+		return nil
+	}
+	logger.Debugf(
+		"rate limiter refill: %.2f tokens/s, bucket size: %d",
+		rlc.RefillTPS, rlc.BucketSize,
+	)
+	return rate.NewLimiter(rate.Limit(rlc.RefillTPS), rlc.BucketSize)
 }

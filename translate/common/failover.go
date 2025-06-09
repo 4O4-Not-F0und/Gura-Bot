@@ -74,7 +74,7 @@ func (gfh *GeneralFailoverHandler) OnFailure() (isDisabled bool) {
 		gfh.currentCooldownMultiplier += 1
 		gfh.disableCycleCount += 1
 		if gfh.disableCycleCount >= gfh.failoverConfig.MaxDisableCycles {
-			gfh.logger.Errorf("Reached maximum disable cycles: %d. Translator permanently disabled",
+			gfh.logger.Errorf("Reached maximum disable cycles: %d. Component permanently disabled",
 				gfh.failoverConfig.MaxDisableCycles)
 			gfh.isPermanentlyDisabled = true
 			return true
