@@ -58,6 +58,12 @@ translate_service:
   # Can be "fallback" or "wrr" (Weighted Round Robin)
   language_detector_selector: fallback
   language_detectors:
+    # https://detectlanguage.com/
+    #- name: detect_language-01
+    #  timeout: 60
+    #  type: detect_language
+    #  token: ""
+
     - name: lingua_default
       # Specifies the type of detector
       type: lingua

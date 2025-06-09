@@ -18,19 +18,19 @@ func init() {
 }
 
 type InstanceLingua struct {
-	name                string
-	confidenceThreshold float64
-	sourceLangs         []string
-	detector            lingua.LanguageDetector
-	logger              *logrus.Entry
+	baseInstance
+	detector lingua.LanguageDetector
 }
 
 func newLinguaInstance(conf DetectorConfig) (instance Instance, err error) {
 	ld := &InstanceLingua{
-		name:                conf.Name,
-		confidenceThreshold: conf.SourceLangConfidenceThreshold,
-		sourceLangs:         conf.SourceLangFilter,
-		logger:              logrus.WithField("detector_instance", conf.Name),
+		baseInstance: baseInstance{
+			name:                conf.Name,
+			confidenceThreshold: conf.SourceLangConfidenceThreshold,
+			sourceLangs:         conf.SourceLangFilter,
+			logger:              logrus.WithField("detector_instance", conf.Name),
+		},
+		detector: nil,
 	}
 
 	allLanguages := map[string]lingua.Language{}
@@ -65,9 +65,17 @@ func (ld *InstanceLingua) Detect(_ context.Context, req DetectRequest) (resp *De
 		}
 	}
 
-	if !slices.Contains(ld.sourceLangs, lang) ||
-		confidence < ld.confidenceThreshold {
-		err = fmt.Errorf("supported language not detected")
+	if lang == "" {
+		err = fmt.Errorf("no language detected")
+		return
+	}
+	if !slices.Contains(ld.sourceLangs, lang) {
+		err = fmt.Errorf("detected language '%s' is not in the configured source language filter", lang)
+		return
+	}
+	if confidence < ld.confidenceThreshold {
+		err = fmt.Errorf("detected language '%s' (confidence: %.2f) is below threshold (%.2f)",
+			lang, confidence, ld.confidenceThreshold)
 		return
 	}
 
@@ -75,8 +83,4 @@ func (ld *InstanceLingua) Detect(_ context.Context, req DetectRequest) (resp *De
 		Language:   lang,
 		Confidence: confidence,
 	}, nil
-}
-
-func (t *InstanceLingua) Name() string {
-	return t.name
 }
