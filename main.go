@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate"
 	"github.com/sirupsen/logrus"
 )
 
@@ -45,9 +47,9 @@ func main() {
 		logrus.Errorf("error parsing new log level '%s': %v", appConfig.LogLevel, err)
 	}
 
-	initMetricServer(appConfig.Metric)
+	metrics.InitMetricServer(appConfig.Metric)
 
-	translateService, err := newTranslateService(appConfig.TranslateService)
+	translateService, err := translate.NewTranslateService(appConfig.TranslateService)
 	if err != nil {
 		logrus.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func handleSignals(bot *Bot) {
 				continue
 			}
 
-			translateService, err := newTranslateService(appConfig.TranslateService)
+			translateService, err := translate.NewTranslateService(appConfig.TranslateService)
 			if err != nil {
 				logrus.Error(err)
 				continue

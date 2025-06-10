@@ -6,6 +6,11 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/4O4-Not-F0und/Gura-Bot/metrics"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/common"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/detector"
+	"github.com/4O4-Not-F0und/Gura-Bot/translate/translator"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 )
@@ -91,7 +96,7 @@ func (ss *SafeSlice[T]) Clone() (s []T) {
 type Bot struct {
 	bot              *tgbotapi.BotAPI
 	updatesChan      tgbotapi.UpdatesChannel
-	translateService *TranslateService
+	translateService *translate.TranslateService
 	messageSettings  BotMessageSettings
 	allowedChats     *SafeSlice[int64]
 	workerPoolSize   int
@@ -99,7 +104,7 @@ type Bot struct {
 	stopServeNotify  chan int
 }
 
-func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err error) {
+func newBot(config BotConfig, translateService *translate.TranslateService) (bot *Bot, err error) {
 	if config.Token == "" {
 		logrus.Fatal("telegram bot token required")
 	}
@@ -141,9 +146,10 @@ func newBot(config BotConfig, translateService *TranslateService) (bot *Bot, err
 	return
 }
 
-func (b *Bot) loadConfig(botConfig BotConfig, translateService *TranslateService) (reServeRequired bool, err error) {
+func (b *Bot) loadConfig(botConfig BotConfig, translateService *translate.TranslateService) (reServeRequired bool, err error) {
 	logrus.Trace("acquiring bot.configMu")
 	b.configMu.Lock()
+	defer b.configMu.Unlock()
 	logrus.Trace("acquired bot.configMu")
 
 	b.allowedChats.New(botConfig.AllowedChats)
@@ -152,12 +158,11 @@ func (b *Bot) loadConfig(botConfig BotConfig, translateService *TranslateService
 	reServeRequired = b.workerPoolSize != botConfig.WorkerPoolSize
 	b.workerPoolSize = botConfig.WorkerPoolSize
 
-	b.configMu.Unlock()
 	logrus.Trace("released bot.configMu")
 	return
 }
 
-func (b *Bot) Reload(botConfig BotConfig, translateService *TranslateService) (err error) {
+func (b *Bot) Reload(botConfig BotConfig, translateService *translate.TranslateService) (err error) {
 	var reServeRequired bool
 	reServeRequired, err = b.loadConfig(botConfig, translateService)
 	if err != nil {
@@ -232,26 +237,36 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
-	lang, confidence, err := b.translateService.DetectLang(msg.Content)
-	msg.logger = msg.logger.WithFields(logrus.Fields{
-		"lang":            lang,
-		"lang_confidence": confidence,
+	langResp, detectorName, err := b.translateService.DetectLang(detector.DetectRequest{
+		Text:    msg.Content,
+		TraceId: msg.TraceId,
 	})
+	if detectorName != "" {
+		msg.logger = msg.logger.WithField("detector_name", detectorName)
+	}
+	if langResp != nil {
+		msg.logger = msg.logger.WithFields(logrus.Fields{
+			"lang":            langResp.Language,
+			"lang_confidence": langResp.Confidence,
+		})
+	}
 	if err != nil {
 		msg.logger.Warn(err)
 		msg.onMessageHandleFailed()
 		return
 	}
 
-	resp, err := b.translateService.Translate(TranslateRequest{
+	resp, translatorName, err := b.translateService.Translate(translator.TranslateRequest{
 		Text:    msg.Content,
 		TraceId: msg.TraceId,
 	})
-	msg.logger = msg.logger.WithField("translator_name", resp.TranslatorName)
+	if translatorName != "" {
+		msg.logger = msg.logger.WithField("translator_name", translatorName)
+	}
 	if err != nil {
 		msg.onMessageHandleFailed()
 
-		var te = new(TranslateError)
+		var te = new(common.HTTPError)
 		if errors.As(err, &te) {
 			msg.logger.Debugf("http request: %s", base64.StdEncoding.EncodeToString(te.DumpRequest(true)))
 			msg.logger.Debugf("http response: %s", base64.StdEncoding.EncodeToString(te.DumpResponse(true)))
@@ -284,7 +299,7 @@ func (b *Bot) handleMessage(msg *Message) {
 func (b *Bot) initMessageMetrics() {
 	for _, ct := range allChatTypes {
 		for _, state := range allMessageStates {
-			metricMessages.WithLabelValues(state, ct).Set(0)
+			metrics.MetricMessages.WithLabelValues(state, ct).Set(0)
 		}
 	}
 

@@ -6,10 +6,15 @@ Gura-Bot is a Go-based Telegram bot that automatically detects the language of i
 
 ## Features
 
-* **Automatic Language Detection**: Identifies the language of incoming messages using [lingua-go](https://github.com/pemistahl/lingua-go).
-* **AI Text Translation**: Translates detected text using any AI models via OpenAI-compatible endpoints.
-* **Multiple Translator Support**: Can be configured with multiple translation service instances (e.g., different models or API providers).
-* **Weighted Round-Robin & Failover**: Distributes translation load across configured translators using a smooth weighted round-robin algorithm and implements a failover mechanism with cooldown periods for temporarily or permanently disabling misbehaving instances.
+* **Automatic Language Detection**: Identifies the language of incoming messages.
+* **AI Text Translation**: Translates detected text using any AI models via OpenAI-compatible APIs.
+* **Multiple Provider Support**:
+    * Language Detectors: `Lingua` (local), `detectlanguage.com` API.
+    * Translators: OpenAI-compatible APIs.
+* **Flexible Service Selection**:
+    * `fallback`: Tries services in a predefined order.
+    * `wrr` (Weighted Round Robin): Distributes load based on configured weights.
+* **Failover**: Distributes work load and implements a failover mechanism with cooldown periods for temporarily or permanently disabling misbehaving instances.
 * **Authorization**: Restricts bot usage to pre-approved Telegram chat IDs or user IDs.
 * **Rate Limiting**: Manages API request rates per translator instance to stay within provider limits.
 * **Concurrent Processing**: Handles multiple translation requests simultaneously using a configurable worker pool.
@@ -54,7 +59,8 @@ The following settings require a full application restart to take effect:
 
 ### Prerequisites
 
-* A Telegram Bot API token.
+* **Telegram Bot API token**: Obtain this from BotFather on Telegram.
+* **External Language Detection Service (Optional)**: If using external services for detection (e.g., `detectlanguage.com` API), you'll need their respective API keys/tokens.
 * Access to an OpenAI-compatible API endpoint and a corresponding API key (e.g., for models like GPT, Claude, Gemini if accessed via a compatible proxy or service).
 
 ### Running the Bot
@@ -69,19 +75,29 @@ The bot exposes Prometheus metrics on the address specified in `metric.listen` (
 
 Metrics include:
 
-* `gura_bot_messages_total` (Gauge): Current number of messages being processed by the bot.
-    * Labels: `state`, `chat_type`
-    * States: `pending` (waiting for an available worker), `processing` (actively handled), `unauthorized` (disallowed source), `failed` (error during handling), `processed` (successfully handled).
-* `gura_bot_translator_tasks_total` (Gauge): Total number of translation tasks, by state and translator.
-    * Labels: `state`, `translator_name`
-    * States: `pending` (waiting for rate limiter), `processing` (waiting for API response), `success` (translation successful), `failed` (any step in translation failed).
-* `gura_bot_translator_tokens_used` (Counter): Used tokens for translation tasks, by token type and translator.
-    * Labels: `token_type`, `translator_name`
-    * Token Types: `completion` (output tokens), `prompt` (input tokens)
-* `gura_bot_translator_up` (Gauge): Indicates if a translator is currently up and operational (1 for up, 0 for disabled due to failover).
-    * Labels: `translator_name`
-* `gura_bot_translator_selection_total` (Counter): Times a specific translator instance was chosen by the load balancing algorithm.
-    * Labels: `translator_name`
+* `gura_bot_messages_total{state, chat_type}` (Gauge): Current number of messages being processed by the bot.
+    * States:
+        * `pending`: waiting for an available worker.
+        * `processing`: actively handled.
+        * `unauthorized`: disallowed source.
+        * `failed`: error during handling.
+        * `processed`: successfully handled.
+* `gura_bot_translator_tasks_total{state, translator_name}` (Gauge): Total number of translation tasks, by state and translator.
+    * States:
+        * `pending`: waiting for rate limiter.
+        * `processing`: waiting for response.
+        * `success`: translation successful.
+        * `failed`: any step in translation failed.
+* `gura_bot_translator_tokens_used{token_type, translator_name}` (Counter): Used tokens for translation tasks, by token type and translator.
+    * Token Types:
+        * `completion`: output tokens.
+        * `prompt`: input tokens.
+* `gura_bot_translator_up{translator_name}` (Gauge): Indicates if a translator is currently up and operational (1 for up, 0 for disabled due to failover).
+* `gura_bot_translator_selection_total{translator_name}` (Counter): Times a specific translator instance was selected.
+* `gura_bot_detector_tasks_total{state, detector_name}` (Gauge): Total number of language detection tasks by state and detector instance name.
+    * States: Refer to `gura_bot_translator_tasks_total`
+* `gura_bot_detector_up{detector_name}` (Gauge): Indicates if a detector is operational.
+* `gura_bot_detector_selection_total{detector_name}` (Counter): Times each detector instance was selected.
 
 ## Contributing
 
